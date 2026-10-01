@@ -34,6 +34,15 @@ export interface AppConfig {
   readonly auditLogFile?: string;
   /** Heartbeat file and interval used by the offline container healthcheck. */
   readonly health: { readonly file: string; readonly intervalMs: number };
+  /** 08:00 ART summary pushed to every allow-listed chat. */
+  readonly dailySummary: { readonly enabled: boolean; readonly hour: number };
+  /** Backend liveness monitor that alerts Mateo after consecutive failures. */
+  readonly healthAlert: {
+    readonly enabled: boolean;
+    readonly intervalMs: number;
+    readonly failureThreshold: number;
+    readonly chatId?: string;
+  };
   /** Profile the standalone MCP server (non-Telegram clients) acts as. */
   readonly mcp: { readonly profile: ProfileName };
 }
@@ -119,6 +128,12 @@ const envSchema = z
     AUDIT_LOG_FILE: z.string().min(1).optional(),
     HEALTH_FILE: z.string().min(1).default("/tmp/mena-assistant-alive"),
     HEALTH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
+    DAILY_SUMMARY_ENABLED: boolFromEnv("true"),
+    DAILY_SUMMARY_HOUR: z.coerce.number().int().min(0).max(23).default(8),
+    HEALTH_ALERT_ENABLED: boolFromEnv("false"),
+    HEALTH_ALERT_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
+    HEALTH_ALERT_FAILURES: z.coerce.number().int().positive().default(3),
+    HEALTH_ALERT_CHAT_ID: z.string().min(1).optional(),
     MCP_PROFILE: z.enum(PROFILE_NAMES).default("mateo"),
   })
   .superRefine((env, ctx) => {
@@ -186,6 +201,13 @@ export function parseConfig(env: EnvRecord): AppConfig {
     proposalTtlMs: value.PROPOSAL_TTL_MINUTES * 60_000,
     auditLogFile: value.AUDIT_LOG_FILE,
     health: { file: value.HEALTH_FILE, intervalMs: value.HEALTH_INTERVAL_SECONDS * 1000 },
+    dailySummary: { enabled: value.DAILY_SUMMARY_ENABLED, hour: value.DAILY_SUMMARY_HOUR },
+    healthAlert: {
+      enabled: value.HEALTH_ALERT_ENABLED,
+      intervalMs: value.HEALTH_ALERT_INTERVAL_SECONDS * 1000,
+      failureThreshold: value.HEALTH_ALERT_FAILURES,
+      chatId: value.HEALTH_ALERT_CHAT_ID,
+    },
     mcp: { profile: value.MCP_PROFILE },
   };
 }

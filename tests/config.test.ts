@@ -24,6 +24,13 @@ describe("parseConfig", () => {
     expect(config.turnos.timeoutMs).toBe(10_000);
     expect(config.features).toEqual({ turnos: true, stock: false, tareas: false });
     expect(config.proposalTtlMs).toBe(10 * 60_000);
+    expect(config.dailySummary).toEqual({ enabled: true, hour: 8 });
+    expect(config.healthAlert).toEqual({
+      enabled: false,
+      intervalMs: 300_000,
+      failureThreshold: 3,
+      chatId: undefined,
+    });
   });
 
   it("switching LLM_MODEL changes the configured model", () => {
@@ -77,10 +84,29 @@ describe("parseConfig", () => {
       FEATURE_STOCK: "true",
       PROPOSAL_TTL_MINUTES: "3",
       LLM_MAX_TOOL_CALLS: "4",
+      DAILY_SUMMARY_ENABLED: "false",
+      DAILY_SUMMARY_HOUR: "9",
+      HEALTH_ALERT_ENABLED: "true",
+      HEALTH_ALERT_INTERVAL_SECONDS: "60",
+      HEALTH_ALERT_FAILURES: "5",
+      HEALTH_ALERT_CHAT_ID: "222",
     });
 
     expect(config.features.stock).toBe(true);
     expect(config.proposalTtlMs).toBe(3 * 60_000);
     expect(config.llm.maxToolCalls).toBe(4);
+    expect(config.dailySummary).toEqual({ enabled: false, hour: 9 });
+    expect(config.healthAlert).toEqual({
+      enabled: true,
+      intervalMs: 60_000,
+      failureThreshold: 5,
+      chatId: "222",
+    });
+  });
+
+  it("rejects an impossible summary hour", () => {
+    expect(() => parseConfig({ ...baseEnv, DAILY_SUMMARY_HOUR: "24" })).toThrow(
+      /DAILY_SUMMARY_HOUR/,
+    );
   });
 });

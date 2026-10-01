@@ -10,11 +10,13 @@ Romi (the salon owner) asks in a Telegram chat — "¿qué turnos tengo hoy?",
 and the assistant answers with real data and, for anything that mutates, returns
 a **proposal** she confirms with an inline **Confirmar / Cancelar** button.
 
-**Status: M1 (real reads).** The `turnos.*` read tools run against the real
-`mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP actions when
-`TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors the same
-contract shapes (`mock`, the dev/CI default). Writes stay confirm-gated, and
-`stock.*` / `tareas.*` are disabled stubs behind feature flags.
+**Status: M2 (confirmed writes + daily summary).** The `turnos.*` / `pagos.*`
+tools run against the real `mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP
+actions when `TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors
+the same contract shapes (`mock`, the dev/CI default). Every write is
+confirm-gated. An in-process scheduler sends the 08:00 ART daily summary and a
+debounced backend health alert. `stock.*` / `tareas.*` are disabled stubs behind
+feature flags.
 
 ## Architecture
 
@@ -29,6 +31,7 @@ Telegram (Romi, Mateo)
 │  2. LLM tool loop (OpenAI-compatible, ≤6 tool calls/turn)    │
 │     └─ only the tools that profile may see                   │
 │  3. audit (JSON lines, PII redacted)                         │
+│  4. scheduler: 08:00 ART summary + health probe              │
 └───────────────┬──────────────────────────────────────────────┘
                 │ MCP (stdio) / in-process tool registry
                 ▼
@@ -76,6 +79,7 @@ src/
   proposals/store.ts    proposal registry (expiry + single use + chat bound)
   audit/                JSONL audit, PII redaction, file sink
   metrics/usage.ts      queries per profile per ISO week
+  schedule/             daily 08:00 ART summary + debounced health alerts
   time/                 America/Argentina/Buenos_Aires + injectable clock
 evals/                  40-case dataset, scripted (CI) and live runners
 scripts/metrics.ts      pnpm metrics CLI
@@ -91,8 +95,8 @@ Requirements: Node 24 and pnpm 11.
 ```bash
 pnpm install
 cp .env.example .env      # fill in the values below
-pnpm test                 # 146 tests
-pnpm eval                 # 40/40 (scripted, deterministic)
+pnpm test                 # 195 tests
+pnpm eval                 # 56/56 (scripted, deterministic)
 pnpm dev                  # long polling with the mock backend
 ```
 
@@ -117,43 +121,56 @@ tools serve fixtures anchored on today's ART date. Point
 
 ## Environment variables
 
-| Variable                  | Default                       | Purpose                                                    |
-| ------------------------- | ----------------------------- | ---------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN`      | — (required)                  | BotFather token.                                           |
-| `TELEGRAM_ALLOWLIST`      | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.           |
-| `LLM_BASE_URL`            | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                |
-| `LLM_API_KEY`             | — (required)                  | Provider key.                                              |
-| `LLM_MODEL`               | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.**     |
-| `LLM_FALLBACK_MODEL`      | `glm5.3-flash`                | Retried when the primary call fails.                       |
-| `LLM_TIMEOUT_MS`          | `30000`                       | Per-call timeout.                                          |
-| `LLM_MAX_TOOL_CALLS`      | `6`                           | Hard cap of tool calls per conversation turn.              |
-| `TURNOS_BACKEND`          | `mock`                        | `mock` (fixtures) or `http` (real `/assistant/*`).         |
-| `ASSISTANT_API_BASE_URL`  | —                             | Convex `.convex.site` origin; required with `http`.        |
-| `ASSISTANT_TOKEN`         | —                             | Bearer token for `/assistant/*`; required with `http`.     |
-| `TURNOS_TIMEOUT_MS`       | `10000`                       | Per-request timeout for the booking backend.               |
-| `FEATURE_TURNOS`          | `true`                        | Registers `turnos.*`.                                      |
-| `FEATURE_STOCK`           | `false`                       | Registers `stock.*` (stub until M3).                       |
-| `FEATURE_TAREAS`          | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).          |
-| `PROPOSAL_TTL_MINUTES`    | `10`                          | Proposal lifetime before the Confirm button dies.          |
-| `AUDIT_LOG_FILE`          | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`. |
-| `HEALTH_FILE`             | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.      |
-| `HEALTH_INTERVAL_SECONDS` | `30`                          | Heartbeat interval; three missed beats = unhealthy.        |
-| `MCP_PROFILE`             | `mateo`                       | Profile the standalone MCP server acts as.                 |
+| Variable                        | Default                       | Purpose                                                    |
+| ------------------------------- | ----------------------------- | ---------------------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN`            | — (required)                  | BotFather token.                                           |
+| `TELEGRAM_ALLOWLIST`            | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.           |
+| `LLM_BASE_URL`                  | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                |
+| `LLM_API_KEY`                   | — (required)                  | Provider key.                                              |
+| `LLM_MODEL`                     | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.**     |
+| `LLM_FALLBACK_MODEL`            | `glm5.3-flash`                | Retried when the primary call fails.                       |
+| `LLM_TIMEOUT_MS`                | `30000`                       | Per-call timeout.                                          |
+| `LLM_MAX_TOOL_CALLS`            | `6`                           | Hard cap of tool calls per conversation turn.              |
+| `TURNOS_BACKEND`                | `mock`                        | `mock` (fixtures) or `http` (real `/assistant/*`).         |
+| `ASSISTANT_API_BASE_URL`        | —                             | Convex `.convex.site` origin; required with `http`.        |
+| `ASSISTANT_TOKEN`               | —                             | Bearer token for `/assistant/*`; required with `http`.     |
+| `TURNOS_TIMEOUT_MS`             | `10000`                       | Per-request timeout for the booking backend.               |
+| `FEATURE_TURNOS`                | `true`                        | Registers `turnos.*`.                                      |
+| `FEATURE_STOCK`                 | `false`                       | Registers `stock.*` (stub until M3).                       |
+| `FEATURE_TAREAS`                | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).          |
+| `PROPOSAL_TTL_MINUTES`          | `10`                          | Proposal lifetime before the Confirm button dies.          |
+| `AUDIT_LOG_FILE`                | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`. |
+| `HEALTH_FILE`                   | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.      |
+| `HEALTH_INTERVAL_SECONDS`       | `30`                          | Heartbeat interval; three missed beats = unhealthy.        |
+| `DAILY_SUMMARY_ENABLED`         | `true`                        | Pushes the 08:00 ART summary to allow-listed chats.        |
+| `DAILY_SUMMARY_HOUR`            | `8`                           | Summary hour in ART (0–23).                                |
+| `HEALTH_ALERT_ENABLED`          | `false`                       | Polls the backend and alerts Mateo on an outage.           |
+| `HEALTH_ALERT_INTERVAL_SECONDS` | `300`                         | Health probe interval.                                     |
+| `HEALTH_ALERT_FAILURES`         | `3`                           | Consecutive failures before the single alert.              |
+| `HEALTH_ALERT_CHAT_ID`          | first `mateo` chat            | Where health alerts go.                                    |
+| `MCP_PROFILE`                   | `mateo`                       | Profile the standalone MCP server acts as.                 |
 
 Invalid configuration fails fast at startup with the offending variables named
 (`node dist/index.js --check` validates without starting the bot).
 
-## Tools (M1)
+## Tools (M2)
 
-| Tool                                              | Kind                 | Backend route it mirrors                        |
-| ------------------------------------------------- | -------------------- | ----------------------------------------------- |
-| `turnos.del_dia(fecha?)`                          | read                 | `POST /assistant/appointments/today` or `/day`  |
-| `turnos.rango(desde?, hasta?)`                    | read                 | `POST /assistant/appointments/range` (≤31 days) |
-| `turnos.disponibilidad(fecha?)`                   | read                 | `POST /assistant/availability`                  |
-| `turnos.servicios()`                              | read                 | `POST /assistant/services`                      |
-| `turnos.pagos_pendientes()`                       | read                 | `/verifications/pending` + `/refunds/summary`   |
-| `turnos.resumen(fecha?)`                          | read                 | `POST /assistant/summary`                       |
-| `turnos.cancelar(appointmentId, motivo?, fecha?)` | **write → proposal** | `POST /assistant/appointments/cancel`           |
+| Tool                                                        | Kind                 | Backend route it mirrors                        |
+| ----------------------------------------------------------- | -------------------- | ----------------------------------------------- |
+| `turnos.del_dia(fecha?)`                                    | read                 | `POST /assistant/appointments/today` or `/day`  |
+| `turnos.rango(desde?, hasta?)`                              | read                 | `POST /assistant/appointments/range` (≤31 days) |
+| `turnos.disponibilidad(fecha?)`                             | read                 | `POST /assistant/availability`                  |
+| `turnos.servicios()`                                        | read                 | `POST /assistant/services`                      |
+| `turnos.pagos_pendientes()`                                 | read                 | `/verifications/pending` + `/refunds/summary`   |
+| `turnos.resumen(fecha?)`                                    | read                 | `POST /assistant/summary`                       |
+| `turnos.marcar_completado(appointmentId, fecha?)`           | **write → proposal** | `POST /assistant/appointments/complete`         |
+| `turnos.cancelar(appointmentId, motivo?, fecha?)`           | **write → proposal** | `POST /assistant/appointments/cancel`           |
+| `turnos.bloquear(fecha, hora?, motivo?, dia_completo?)`     | **write → proposal** | `POST /assistant/blocks/create`                 |
+| `turnos.desbloquear(blockedSlotId, fecha?, hora?)`          | **write → proposal** | `POST /assistant/blocks/remove`                 |
+| `turnos.crear_para_clienta(cliente, telefono, servicio, …)` | **write → proposal** | `POST /assistant/appointments/create`           |
+| `turnos.reprogramar(appointmentId, fecha, hora, …)`         | **write → proposal** | `POST /assistant/appointments/reschedule`       |
+| `pagos.confirmar_transferencia(verificationId)`             | **write → proposal** | `POST /assistant/transfers/confirm`             |
+| `pagos.rechazar_transferencia(verificationId, motivo)`      | **write → proposal** | `POST /assistant/transfers/reject`              |
 
 Dates accept `YYYY-MM-DD`, `hoy` / `mañana` / `pasado mañana` / `ayer`, weekday
 names (`el jueves`) and `esta semana` / `la semana que viene` (ranges), always
@@ -164,18 +181,62 @@ comes back.
 
 ### Proposal → Confirm flow
 
-1. The model calls `turnos.cancelar`; the tool stores a proposal (10 min TTL)
-   and returns `{ proposal_id, summary, diff, requires_confirmation: true }`.
+1. The model calls a write tool; the tool validates its inputs with Zod, reads
+   whatever current state it needs, and stores a proposal (10 min TTL) with a
+   code-built Spanish summary and diff — the LLM never writes them. It returns
+   `{ proposal_id, summary, diff, requires_confirmation: true }`.
 2. The bot sends the summary + diff with an inline `✅ Confirmar` /
    `❌ Cancelar` keyboard.
 3. On callback the store validates, in order: the proposal exists, is not
    consumed, is not expired, and belongs to the **same chat** (a wrong chat does
    not burn it). Only then does the write tool's `executeProposal` call the
-   adapter. Replays, wrong chats and expired proposals execute nothing.
+   adapter — the backend HTTP write, always with `retry: false`. Replays, wrong
+   chats and expired proposals execute nothing. Backend rejections (including
+   HTTP 500 domain errors like "slot taken") become clear Spanish messages.
 
 A turn proposes **at most one write**. Further write tool calls in the same turn
 are refused (audited as `denied`) and answered with a tool result that tells the
 model to ask for confirmation on the pending action first; reads keep working.
+
+## Daily summary (08:00 ART)
+
+An in-process scheduler (no external cron) computes the next 08:00 in
+`America/Argentina/Buenos_Aires` from the injected clock and sends one message
+per allow-listed chat, built from reads only — no LLM:
+
+```
+☀️ Buenos días — resumen del 2026-01-14
+
+Turnos: 3 (1 confirmed, 1 paid, 1 cancelled) · Seña facturada: $24000
+- 08:00 · Servicio Soft Gel · Ana G. (confirmed)
+- 14:00 · Servicio Capping · Laura P. (paid)
+
+Pagos por revisar: 2
+- 2026-01-14 08:00 · Ana G. · $12500 (pending)
+Reintegros pendientes: 1 · $5000
+```
+
+Romi gets the day's appointments, the pending verifications and the refund
+summary; Mateo gets the same plus a `tareas` placeholder while `FEATURE_TAREAS`
+is off. If the backend is down the scheduler skips silently and audits
+`daily_summary / backend_unavailable` instead of sending a broken message.
+`DAILY_SUMMARY_ENABLED=false` turns it off and `DAILY_SUMMARY_HOUR` moves it.
+
+## Health alerts
+
+With `HEALTH_ALERT_ENABLED=true` the process polls the cheapest read
+(`turnos.servicios`) every `HEALTH_ALERT_INTERVAL_SECONDS`. After
+`HEALTH_ALERT_FAILURES` consecutive failures it sends **one** message to Mateo's
+chat and **one** recovery message when the backend answers again — a single
+hiccup never spams. Off by default in dev.
+
+## Push alerts belong to mena-nails-turnos
+
+Convex already sends the Telegram admin alerts at the source (transfer to
+review, orphan/duplicate payment, dispute, cancellation, calendar failure), so
+the assistant does **not** duplicate them. Both may use the same bot token:
+Convex only calls `sendMessage`, while the assistant is the only `getUpdates`
+consumer, so long polling never competes.
 
 ## MCP server
 
@@ -190,11 +251,11 @@ button, so its proposals expire unless confirmed from the bot.
 ## Evals
 
 ```bash
-pnpm eval        # 40 cases, scripted transport + mock backend, deterministic, in CI
+pnpm eval        # 56 cases, scripted transport + mock backend, deterministic, in CI
 pnpm eval:live   # same dataset against a real model (needs LLM_API_KEY; never in CI)
 ```
 
-Current result: **40/40 passed · tool accuracy 100.0% · args accuracy 100.0%**
+Current result: **56/56 passed · tool accuracy 100.0% · args accuracy 100.0%**
 (scripted). The scripted transport is not a model-quality measurement: it pins
 tool selection and ART argument resolution so regressions fail in CI. Model
 comparison (`deepseek-v4-flash` vs `qwen3.8-flash` vs `glm5.3-flash` vs
@@ -300,9 +361,8 @@ Checked against <https://nan.builders/docs/models>:
   `LLM_API_KEY`), so real tool-calling behaviour, latency and cost are unmeasured.
   The four-way model comparison belongs to M4.
 
-## Next step (M2)
+## Next step (M3)
 
-Writes with confirmation (complete, cancel, block, confirm transferencia) plus
-the 8:00 ART daily summary and push alerts. M2 reuses the write path already in
-place: the tool proposes, the bot confirms, the adapter executes — only the
-`/assistant/appointments/*` and `/assistant/transfers/*` write routes are new.
+Stock (needs mena-nails deployed): `stock.*` reads, `turnos.sincronizar_precios`
+(mena-nails owns prices) and the stock alerts, plus the "turno completado →
+descuento de stock" chain.

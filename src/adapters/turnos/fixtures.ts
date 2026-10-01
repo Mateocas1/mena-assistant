@@ -57,6 +57,15 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
     timeSlots: TIME_SLOTS,
     appointments: [
       {
+        id: "apt_past_0800",
+        date: addDays(referenceDate, -7),
+        timeSlot: "08:00",
+        status: "confirmed",
+        serviceName: "Servicio Soft Gel",
+        clientName: "Paula V.",
+        depositPrice: 12500,
+      },
+      {
         id: "apt_today_0800",
         date: referenceDate,
         timeSlot: "08:00",
@@ -120,6 +129,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
     verifications: [
       {
         id: "ver_today_pending",
+        paymentId: "pay_today_pending",
         status: "pending",
         reason: "amount_mismatch",
         amount: 12500,
@@ -129,6 +139,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
       },
       {
         id: "ver_today_failed",
+        paymentId: "pay_today_failed",
         status: "failed",
         reason: "wrong_destination",
         amount: 11500,
@@ -138,6 +149,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
       },
       {
         id: "ver_tomorrow_matched",
+        paymentId: "pay_tomorrow_matched",
         status: "matched",
         reason: "verified",
         amount: 4000,

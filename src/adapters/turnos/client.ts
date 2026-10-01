@@ -43,6 +43,12 @@ export interface AssistantVerification {
   readonly date: string | null;
   readonly timeSlot: string | null;
   readonly clientName: string | null;
+  /**
+   * Payment the verification belongs to. The write routes need it; today the
+   * backend keeps it out of the response, so it is optional and the tools
+   * resolve it from this list when present.
+   */
+  readonly paymentId?: string;
 }
 
 /** `POST /assistant/refunds/summary`. */
@@ -77,7 +83,53 @@ export interface CancelResult {
   readonly depositRetained: boolean;
 }
 
-/** Booking backend used by the `turnos.*` tools. */
+/** `POST /assistant/appointments/complete` and the block/transfer routes. */
+export interface SimpleWriteResult {
+  readonly success: true;
+}
+
+/** `POST /assistant/blocks/create`. */
+export interface BlockResult {
+  readonly success: true;
+  readonly blockedSlotId: string;
+}
+
+/** `POST /assistant/appointments/create`. */
+export interface CreateAppointmentResult {
+  readonly success: true;
+  readonly appointmentId: string;
+}
+
+/** `POST /assistant/appointments/reschedule`. */
+export interface RescheduleResult {
+  readonly success: true;
+  readonly appointmentId: string;
+  readonly date: string;
+  readonly timeSlot: string;
+}
+
+export interface BlockInput {
+  readonly date: string;
+  readonly timeSlot?: string;
+  readonly reason?: string;
+  readonly isFullDay: boolean;
+}
+
+export interface NewAppointmentInput {
+  readonly clientName: string;
+  readonly clientPhone: string;
+  readonly clientEmail?: string;
+  readonly serviceSlug: string;
+  readonly date: string;
+  readonly timeSlot: string;
+  readonly removalAddOn?: boolean;
+  readonly notes?: string;
+}
+
+/**
+ * Booking backend used by the `turnos.*` tools. Writes are always reached
+ * through a confirmed proposal, never by the model directly.
+ */
 export interface TurnosBackend {
   /** Projection of `POST /assistant/appointments/day` (or `/today`). */
   delDia(date: string): Promise<Appointment[]>;
@@ -91,8 +143,26 @@ export interface TurnosBackend {
   pagosPendientes(): Promise<PendingPayments>;
   /** Projection of `POST /assistant/summary`. */
   resumen(date: string): Promise<DailySummary>;
+  /** `POST /assistant/appointments/complete` (write; confirm-gated). */
+  marcarCompletado(appointmentId: string): Promise<SimpleWriteResult>;
   /** Projection of `POST /assistant/appointments/cancel` (write; confirm-gated). */
   cancelar(appointmentId: string, motivo?: string): Promise<CancelResult>;
+  /** `POST /assistant/blocks/create` (write; confirm-gated). */
+  bloquear(input: BlockInput): Promise<BlockResult>;
+  /** `POST /assistant/blocks/remove` (write; confirm-gated). */
+  desbloquear(blockedSlotId: string): Promise<SimpleWriteResult>;
+  /** `POST /assistant/appointments/create` (write; confirm-gated). */
+  crearParaClienta(input: NewAppointmentInput): Promise<CreateAppointmentResult>;
+  /** `POST /assistant/appointments/reschedule` (write; confirm-gated). */
+  reprogramar(appointmentId: string, date: string, timeSlot: string): Promise<RescheduleResult>;
+  /** `POST /assistant/transfers/confirm` (write; confirm-gated). */
+  confirmarTransferencia(paymentId: string, verificationId: string): Promise<SimpleWriteResult>;
+  /** `POST /assistant/transfers/reject` (write; confirm-gated). */
+  rechazarTransferencia(
+    paymentId: string,
+    verificationId: string,
+    reason: string,
+  ): Promise<SimpleWriteResult>;
 }
 
 /** User-facing copy for the failure modes the bot must explain clearly. */

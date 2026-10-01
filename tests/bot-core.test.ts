@@ -272,6 +272,86 @@ describe("write proposals require a verified callback", () => {
     expect(test.backend.cancelCalls).toEqual([]);
   });
 
+  it("executes a non-cancel write only through its callback", async () => {
+    const { deps, test } = setup([
+      toolCallCompletion("turnos.bloquear", { fecha: "2026-01-20", hora: "16:30" }),
+      textCompletion("Preparé el bloqueo."),
+    ]);
+
+    const reply = await propose(deps);
+    expect(reply.proposals[0]?.tool).toBe("turnos.bloquear");
+    expect(
+      (await test.backend.disponibilidad("2026-01-20")).find((slot) => slot.time === "16:30")
+        ?.available,
+    ).toBe(true);
+
+    const outcome = await handleCallback(deps, {
+      chatId: ROMI,
+      action: "confirm",
+      proposalId: reply.proposals[0]!.id,
+    });
+
+    expect(outcome.text).toContain("✅");
+    expect(
+      (await test.backend.disponibilidad("2026-01-20")).find((slot) => slot.time === "16:30")
+        ?.available,
+    ).toBe(false);
+  });
+
+  it("replies with the translated backend message when a write fails", async () => {
+    const { deps, test } = setup([
+      toolCallCompletion("turnos.cancelar", { appointmentId: "apt_cancelled_today" }),
+      textCompletion("ok"),
+    ]);
+    const reply = await propose(deps);
+
+    const outcome = await handleCallback(deps, {
+      chatId: ROMI,
+      action: "confirm",
+      proposalId: reply.proposals[0]!.id,
+    });
+
+    expect(outcome.text).toBe("Ese turno no se puede cancelar (ya está cancelado o completado).");
+    expect(test.backend.cancelCalls).toEqual(["apt_cancelled_today"]);
+  });
+
+  it("falls back to the generic message for an unexpected write failure", async () => {
+    let executed = false;
+    const failingWrite = defineWriteTool({
+      name: "turnos.explode",
+      title: "stub",
+      description: "test stub",
+      schema: z.object({ titulo: z.string() }),
+      async propose() {
+        throw new Error("propose must not run through a callback");
+      },
+      async executeProposal() {
+        executed = true;
+        throw new TypeError("boom");
+      },
+    });
+    const registry = new ToolRegistry([...createTurnosTools(), failingWrite]);
+    const { deps } = setup([], { registry });
+    const forged = deps.proposals.create({
+      chatId: String(ROMI),
+      profile: "romi",
+      tool: "turnos.explode",
+      args: { titulo: "x" },
+      summary: "forged",
+      diff: "forged",
+    });
+
+    const outcome = await handleCallback(deps, {
+      chatId: ROMI,
+      action: "confirm",
+      proposalId: forged.id,
+    });
+
+    expect(executed).toBe(true);
+    expect(outcome.text).toContain(GENERIC_ERROR_REPLY);
+    expect(outcome.text).toContain("boom");
+  });
+
   it("refuses to execute when the proposal profile does not match the chat profile", async () => {
     const { deps, test, lines } = setup([]);
     const forged = deps.proposals.create({

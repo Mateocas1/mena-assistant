@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ToolArgumentError, isWriteTool } from "../src/mcp/registry.js";
+import { ToolArgumentError, type WriteToolDefinition } from "../src/mcp/registry.js";
 import { createTurnosTools } from "../src/mcp/tools/turnos.js";
 import { makeTestContext, TEST_ART_DATE, TEST_CHAT_ID } from "./helpers/context.js";
 
@@ -10,7 +10,9 @@ const disponibilidad = tools.find((tool) => tool.name === "turnos.disponibilidad
 const servicios = tools.find((tool) => tool.name === "turnos.servicios")!;
 const pagosPendientes = tools.find((tool) => tool.name === "turnos.pagos_pendientes")!;
 const resumen = tools.find((tool) => tool.name === "turnos.resumen")!;
-const cancelar = tools.find(isWriteTool)!;
+const cancelar = tools.find(
+  (tool): tool is WriteToolDefinition => tool.name === "turnos.cancelar",
+)!;
 
 describe("turnos read tools", () => {
   it("uses the ART date for 'hoy' at 22:30 ART (01:30 UTC)", async () => {

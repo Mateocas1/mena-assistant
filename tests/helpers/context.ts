@@ -51,7 +51,9 @@ export interface TestContext {
 export function makeTestContext(
   overrides: Partial<Pick<ToolHandlerContext, "profile" | "chatId">> = {},
 ): TestContext {
-  const backend = new SpyTurnosBackend(createTurnosFixtures(TEST_ART_DATE));
+  const backend = new SpyTurnosBackend(createTurnosFixtures(TEST_ART_DATE), {
+    clock: fixedClock(TEST_INSTANT),
+  });
   const proposals = new ProposalStore({
     ttlMs: 10 * 60_000,
     clock: fixedClock(TEST_INSTANT),

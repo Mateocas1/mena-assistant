@@ -355,3 +355,97 @@ describe("HttpTurnosClient network errors", () => {
     expect(script.calls).toHaveLength(2);
   });
 });
+
+describe("HttpTurnosClient writes", () => {
+  it("maps every write to its endpoint and body", async () => {
+    const script = new ScriptedFetch([
+      () => json({ success: true }),
+      () => json({ success: true, blockedSlotId: "blk_1" }),
+      () => json({ success: true }),
+      () => json({ success: true, appointmentId: "apt_new_1" }),
+      () =>
+        json({
+          success: true,
+          appointmentId: "apt_1",
+          date: "2026-01-20",
+          timeSlot: "11:00",
+        }),
+      () => json({ success: true }),
+      () => json({ success: true }),
+    ]);
+    const client = makeClient(script);
+
+    await client.marcarCompletado("apt_1");
+    await client.bloquear({
+      date: "2026-01-20",
+      timeSlot: "11:00",
+      isFullDay: false,
+      reason: "curso",
+    });
+    await client.desbloquear("blk_1");
+    await client.crearParaClienta({
+      clientName: "Ana Gomez",
+      clientPhone: "1145556666",
+      serviceSlug: "servicio-softgel",
+      date: "2026-01-20",
+      timeSlot: "16:30",
+      removalAddOn: true,
+    });
+    await client.reprogramar("apt_1", "2026-01-20", "11:00");
+    await client.confirmarTransferencia("pay_1", "ver_1");
+    await client.rechazarTransferencia("pay_1", "ver_1", "no coincide");
+
+    expect(script.calls.map((call) => call.url)).toEqual([
+      `${BASE_URL}/assistant/appointments/complete`,
+      `${BASE_URL}/assistant/blocks/create`,
+      `${BASE_URL}/assistant/blocks/remove`,
+      `${BASE_URL}/assistant/appointments/create`,
+      `${BASE_URL}/assistant/appointments/reschedule`,
+      `${BASE_URL}/assistant/transfers/confirm`,
+      `${BASE_URL}/assistant/transfers/reject`,
+    ]);
+    expect(script.calls.map((call) => call.init.method)).toEqual(Array(7).fill("POST"));
+    expect(script.calls[0]?.body).toEqual({ appointmentId: "apt_1" });
+    expect(script.calls[1]?.body).toEqual({
+      date: "2026-01-20",
+      isFullDay: false,
+      timeSlot: "11:00",
+      reason: "curso",
+    });
+    expect(script.calls[2]?.body).toEqual({ blockedSlotId: "blk_1" });
+    expect(script.calls[3]?.body).toEqual({
+      clientName: "Ana Gomez",
+      clientPhone: "1145556666",
+      serviceSlug: "servicio-softgel",
+      date: "2026-01-20",
+      timeSlot: "16:30",
+      removalAddOn: true,
+    });
+    expect(script.calls[4]?.body).toEqual({
+      appointmentId: "apt_1",
+      date: "2026-01-20",
+      timeSlot: "11:00",
+    });
+    expect(script.calls[5]?.body).toEqual({ paymentId: "pay_1", verificationId: "ver_1" });
+    expect(script.calls[6]?.body).toEqual({
+      paymentId: "pay_1",
+      verificationId: "ver_1",
+      reason: "no coincide",
+    });
+  });
+
+  it("does not retry a write that fails with a domain 500", async () => {
+    const script = new ScriptedFetch([
+      () => errorBody("Este horario ya está ocupado. Por favor seleccioná otro.", 500),
+    ]);
+
+    const error = await makeClient(script)
+      .reprogramar("apt_1", "2026-01-20", "11:00")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(TurnosHttpError);
+    expect((error as TurnosHttpError).status).toBe(500);
+    expect((error as Error).message).toContain("ya está ocupado");
+    expect(script.calls).toHaveLength(1);
+  });
+});

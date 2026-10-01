@@ -7,6 +7,8 @@ import { createLlmTransport, type LlmTransport } from "./llm/index.js";
 import { checkLiveness, parseRunMode, startLiveness } from "./health.js";
 import { createToolRegistry } from "./mcp/tools/index.js";
 import { ProposalStore } from "./proposals/store.js";
+import { startDailySummary } from "./schedule/daily-summary.js";
+import { createHealthMonitor, resolveHealthAlertChat } from "./schedule/health-monitor.js";
 import { systemClock, type Clock } from "./time/index.js";
 
 export interface CreateDepsOptions {
@@ -70,18 +72,58 @@ async function main(): Promise<void> {
     return;
   }
 
-  const bot = createBot(config.telegram.botToken, createBotDeps(config, { clock: systemClock }));
+  const deps = createBotDeps(config, { clock: systemClock });
+  const bot = createBot(config.telegram.botToken, deps);
   const stopLiveness = startLiveness({
     file: config.health.file,
     intervalMs: config.health.intervalMs,
   });
+
+  const sendToChat = async (chatId: string, text: string): Promise<void> => {
+    await bot.api.sendMessage(chatId, text);
+  };
+
+  const stopSummary = config.dailySummary.enabled
+    ? startDailySummary({
+        backend: deps.backend,
+        allowlist: config.telegram.allowlist,
+        audit: deps.audit,
+        send: sendToChat,
+        clock: systemClock,
+        features: config.features,
+        hour: config.dailySummary.hour,
+      })
+    : (): void => {};
+
+  const alertChat = resolveHealthAlertChat(config.telegram.allowlist, config.healthAlert.chatId);
+  if (config.healthAlert.enabled && !alertChat) {
+    console.error(
+      "[mena-assistant] HEALTH_ALERT_ENABLED is on but no `mateo` chat is allow-listed; health alerts are off",
+    );
+  }
+  const stopHealth =
+    config.healthAlert.enabled && alertChat
+      ? createHealthMonitor({
+          probe: async () => {
+            await deps.backend.servicios();
+          },
+          notify: sendToChat,
+          chatId: alertChat,
+          audit: deps.audit,
+          intervalMs: config.healthAlert.intervalMs,
+          failureThreshold: config.healthAlert.failureThreshold,
+        }).start()
+      : (): void => {};
+
   console.error(
-    `[mena-assistant] starting long polling — model=${config.llm.model} fallback=${config.llm.fallbackModel} turnos=${config.turnos.backend} health=${config.health.file}`,
+    `[mena-assistant] starting long polling — model=${config.llm.model} fallback=${config.llm.fallbackModel} turnos=${config.turnos.backend} health=${config.health.file} summary=${config.dailySummary.enabled ? `${config.dailySummary.hour}:00 ART` : "off"} alerts=${config.healthAlert.enabled && alertChat ? "on" : "off"}`,
   );
 
   const stop = async (signal: string): Promise<void> => {
     console.error(`[mena-assistant] stopping (${signal})`);
     stopLiveness();
+    stopSummary();
+    stopHealth();
     await bot.stop();
   };
   process.once("SIGINT", () => void stop("SIGINT"));

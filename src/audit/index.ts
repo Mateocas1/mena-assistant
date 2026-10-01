@@ -13,6 +13,8 @@ export type AuditEvent =
   | "proposal_created"
   | "proposal_confirmed"
   | "proposal_cancelled"
+  | "daily_summary"
+  | "health_alert"
   | "error";
 
 export type AuditStatus = "ok" | "error" | "proposal" | "denied";

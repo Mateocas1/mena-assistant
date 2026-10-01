@@ -11,10 +11,16 @@ import {
   TurnosTimeoutError,
   type Appointment,
   type AvailabilitySlot,
+  type BlockInput,
+  type BlockResult,
   type CancelResult,
+  type CreateAppointmentResult,
   type DailySummary,
+  type NewAppointmentInput,
   type PendingPayments,
+  type RescheduleResult,
   type Service,
+  type SimpleWriteResult,
   type TurnosBackend,
 } from "./client.js";
 
@@ -49,6 +55,8 @@ const verificationSchema = z.object({
   date: z.string().nullable(),
   timeSlot: z.string().nullable(),
   clientName: z.string().nullable(),
+  // Optional: today only the DB row has it.
+  paymentId: z.string().optional(),
 });
 const verificationsSchema = z.array(verificationSchema);
 const refundsSchema = z.object({
@@ -70,6 +78,16 @@ const cancelSchema = z.object({
   refundRequired: z.boolean(),
   refundReason: z.enum(["client_cancellation", "admin_cancellation"]).nullable(),
   depositRetained: z.boolean(),
+});
+
+const simpleWriteSchema = z.object({ success: z.literal(true) });
+const blockWriteSchema = z.object({ success: z.literal(true), blockedSlotId: z.string() });
+const createWriteSchema = z.object({ success: z.literal(true), appointmentId: z.string() });
+const rescheduleWriteSchema = z.object({
+  success: z.literal(true),
+  appointmentId: z.string(),
+  date: z.string(),
+  timeSlot: z.string(),
 });
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -190,6 +208,91 @@ export class HttpTurnosClient implements TurnosBackend {
     const body = motivo === undefined ? { appointmentId } : { appointmentId, reason: motivo };
     // Writes never retry: a retry could double-apply a state change.
     return await this.post("/assistant/appointments/cancel", body, cancelSchema, { retry: false });
+  }
+
+  async marcarCompletado(appointmentId: string): Promise<SimpleWriteResult> {
+    return await this.post(
+      "/assistant/appointments/complete",
+      { appointmentId },
+      simpleWriteSchema,
+      { retry: false },
+    );
+  }
+
+  async bloquear(input: BlockInput): Promise<BlockResult> {
+    return await this.post(
+      "/assistant/blocks/create",
+      {
+        date: input.date,
+        isFullDay: input.isFullDay,
+        ...(input.timeSlot === undefined ? {} : { timeSlot: input.timeSlot }),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      },
+      blockWriteSchema,
+      { retry: false },
+    );
+  }
+
+  async desbloquear(blockedSlotId: string): Promise<SimpleWriteResult> {
+    return await this.post("/assistant/blocks/remove", { blockedSlotId }, simpleWriteSchema, {
+      retry: false,
+    });
+  }
+
+  async crearParaClienta(input: NewAppointmentInput): Promise<CreateAppointmentResult> {
+    return await this.post(
+      "/assistant/appointments/create",
+      {
+        clientName: input.clientName,
+        clientPhone: input.clientPhone,
+        serviceSlug: input.serviceSlug,
+        date: input.date,
+        timeSlot: input.timeSlot,
+        ...(input.clientEmail === undefined ? {} : { clientEmail: input.clientEmail }),
+        ...(input.removalAddOn === undefined ? {} : { removalAddOn: input.removalAddOn }),
+        ...(input.notes === undefined ? {} : { notes: input.notes }),
+      },
+      createWriteSchema,
+      { retry: false },
+    );
+  }
+
+  async reprogramar(
+    appointmentId: string,
+    date: string,
+    timeSlot: string,
+  ): Promise<RescheduleResult> {
+    return await this.post(
+      "/assistant/appointments/reschedule",
+      { appointmentId, date, timeSlot },
+      rescheduleWriteSchema,
+      { retry: false },
+    );
+  }
+
+  async confirmarTransferencia(
+    paymentId: string,
+    verificationId: string,
+  ): Promise<SimpleWriteResult> {
+    return await this.post(
+      "/assistant/transfers/confirm",
+      { paymentId, verificationId },
+      simpleWriteSchema,
+      { retry: false },
+    );
+  }
+
+  async rechazarTransferencia(
+    paymentId: string,
+    verificationId: string,
+    reason: string,
+  ): Promise<SimpleWriteResult> {
+    return await this.post(
+      "/assistant/transfers/reject",
+      { paymentId, verificationId, reason },
+      simpleWriteSchema,
+      { retry: false },
+    );
   }
 
   private async post<T>(

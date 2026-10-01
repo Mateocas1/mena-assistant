@@ -1,7 +1,13 @@
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { AuditLogger, hashChatId } from "../audit/index.js";
 import type { AppConfig, ProfileName } from "../config.js";
-import { buildSystemPrompt, LlmError, runToolLoop, type LlmTransport } from "../llm/index.js";
+import {
+  buildSystemPrompt,
+  LlmError,
+  runToolLoop,
+  userMessageOf,
+  type LlmTransport,
+} from "../llm/index.js";
 import { isWriteTool, type ToolHandlerContext, type ToolRegistry } from "../mcp/registry.js";
 import type { Proposal, ProposalStore } from "../proposals/store.js";
 import { systemClock, type Clock } from "../time/index.js";
@@ -215,6 +221,8 @@ export async function handleCallback(
     return { kind: "reply", text: `✅ ${proposal.summary}.${extra}` };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    // Adapter errors carry Spanish copy for the user; anything else stays generic.
+    const userMessage = userMessageOf(error);
     deps.audit.log({
       event: "proposal_confirmed",
       profile,
@@ -224,6 +232,6 @@ export async function handleCallback(
       status: "error",
       error: detail,
     });
-    return { kind: "reply", text: `${GENERIC_ERROR_REPLY} (${detail})` };
+    return { kind: "reply", text: userMessage ?? `${GENERIC_ERROR_REPLY} (${detail})` };
   }
 }

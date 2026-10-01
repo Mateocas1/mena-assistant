@@ -14,7 +14,14 @@ const ROMI_TOOL_NAMES = [
   "turnos.servicios",
   "turnos.pagos_pendientes",
   "turnos.resumen",
+  "turnos.marcar_completado",
   "turnos.cancelar",
+  "turnos.bloquear",
+  "turnos.desbloquear",
+  "turnos.crear_para_clienta",
+  "turnos.reprogramar",
+  "pagos.confirmar_transferencia",
+  "pagos.rechazar_transferencia",
 ];
 
 describe("ToolRegistry", () => {

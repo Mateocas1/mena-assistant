@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createTurnosFixtures } from "../src/adapters/turnos/fixtures.js";
 import { MockTurnosBackend } from "../src/adapters/turnos/mock.js";
-import { TurnosNotFoundError } from "../src/adapters/turnos/client.js";
+import { TurnosError, TurnosNotFoundError } from "../src/adapters/turnos/client.js";
+import { fixedClock } from "../src/time/index.js";
 
 const REFERENCE = "2026-01-14"; // Wednesday
 const fixtures = createTurnosFixtures(REFERENCE);
@@ -158,5 +159,132 @@ describe("MockTurnosBackend M1 reads", () => {
     expect(summary.totalAppointments).toBe(0);
     expect(summary.counts).toEqual({});
     expect(summary.revenue).toBe(0);
+  });
+});
+
+describe("MockTurnosBackend writes", () => {
+  // 01:30 UTC is 22:30 on 2026-01-14 in Buenos Aires (the fixtures' "today").
+  const clock = fixedClock("2026-01-15T01:30:00Z");
+  const makeBackend = () => new MockTurnosBackend(fixtures, { clock });
+
+  it("completes a past confirmed appointment only", async () => {
+    const backend = makeBackend();
+
+    await expect(backend.marcarCompletado("apt_past_0800")).resolves.toEqual({ success: true });
+    const past = await backend.delDia("2026-01-07");
+    expect(past[0]?.status).toBe("completed");
+
+    await expect(backend.marcarCompletado("apt_today_0800")).rejects.toThrow(/not arrived yet/i);
+    await expect(backend.marcarCompletado("apt_cancelled_today")).rejects.toThrow(
+      /only confirmed/i,
+    );
+    await expect(backend.marcarCompletado("apt_nope")).rejects.toBeInstanceOf(TurnosNotFoundError);
+  });
+
+  it("blocks and unblocks a day or a single slot", async () => {
+    const backend = makeBackend();
+
+    const day = await backend.bloquear({ date: "2026-01-20", isFullDay: true, reason: "feriado" });
+    expect(day.blockedSlotId).toBe("blk_1");
+    expect((await backend.disponibilidad("2026-01-20")).every((slot) => !slot.available)).toBe(
+      true,
+    );
+
+    const slot = await backend.bloquear({
+      date: "2026-01-21",
+      timeSlot: "11:00",
+      isFullDay: false,
+    });
+    const availability = await backend.disponibilidad("2026-01-21");
+    expect(availability.find((entry) => entry.time === "11:00")?.available).toBe(false);
+    expect(availability.find((entry) => entry.time === "14:00")?.available).toBe(true);
+
+    await backend.desbloquear(slot.blockedSlotId);
+    expect(
+      (await backend.disponibilidad("2026-01-21")).find((entry) => entry.time === "11:00")
+        ?.available,
+    ).toBe(true);
+
+    await expect(backend.desbloquear("blk_nope")).rejects.toBeInstanceOf(TurnosNotFoundError);
+  });
+
+  it("creates an appointment for a client and rejects a taken slot", async () => {
+    const backend = makeBackend();
+
+    const created = await backend.crearParaClienta({
+      clientName: "Ana Gomez",
+      clientPhone: "1145556666",
+      serviceSlug: "servicio-softgel",
+      date: "2026-01-20",
+      timeSlot: "16:30",
+    });
+
+    expect(created.success).toBe(true);
+    const day = await backend.delDia("2026-01-20");
+    expect(day).toEqual([
+      {
+        id: created.appointmentId,
+        date: "2026-01-20",
+        timeSlot: "16:30",
+        status: "pending",
+        serviceName: "Servicio Soft Gel",
+        clientName: "Ana G.",
+      },
+    ]);
+
+    await expect(
+      backend.crearParaClienta({
+        clientName: "Otra",
+        clientPhone: "1145556667",
+        serviceSlug: "servicio-softgel",
+        date: "2026-01-20",
+        timeSlot: "16:30",
+      }),
+    ).rejects.toThrow(/ya está ocupado/i);
+
+    await expect(
+      backend.crearParaClienta({
+        clientName: "Otra",
+        clientPhone: "1145556667",
+        serviceSlug: "servicio-inexistente",
+        date: "2026-01-20",
+        timeSlot: "11:00",
+      }),
+    ).rejects.toThrow(TurnosError);
+  });
+
+  it("reschedules onto a free slot and refuses a taken one", async () => {
+    const backend = makeBackend();
+
+    const moved = await backend.reprogramar("apt_today_0800", "2026-01-20", "11:00");
+    expect(moved).toEqual({
+      success: true,
+      appointmentId: "apt_today_0800",
+      date: "2026-01-20",
+      timeSlot: "11:00",
+    });
+    expect((await backend.delDia(REFERENCE)).map((a) => a.id)).not.toContain("apt_today_0800");
+    expect((await backend.delDia("2026-01-20")).map((a) => a.id)).toEqual(["apt_today_0800"]);
+
+    await expect(backend.reprogramar("apt_tomorrow_1100", "2026-01-20", "11:00")).rejects.toThrow(
+      /ya está ocupado/i,
+    );
+    await expect(backend.reprogramar("apt_cancelled_today", "2026-01-20", "14:00")).rejects.toThrow(
+      /cannot reschedule/i,
+    );
+  });
+
+  it("confirms and rejects transfers, clearing them from the pending list", async () => {
+    const backend = makeBackend();
+
+    await backend.confirmarTransferencia("pay_today_pending", "ver_today_pending");
+    await backend.rechazarTransferencia("pay_today_failed", "ver_today_failed", "no coincide");
+
+    const pending = await backend.pagosPendientes();
+    expect(pending.verificaciones).toEqual([]);
+
+    await expect(backend.confirmarTransferencia("pay_x", "ver_nope")).rejects.toBeInstanceOf(
+      TurnosNotFoundError,
+    );
   });
 });
