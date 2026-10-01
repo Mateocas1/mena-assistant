@@ -1,7 +1,18 @@
 import { z } from "zod";
 import type { Appointment } from "../../adapters/turnos/client.js";
-import { resolveArtDate } from "../../time/index.js";
 import {
+  artToday,
+  artTomorrow,
+  artWeekRange,
+  InvalidDateError,
+  InvalidRangeError,
+  MAX_RANGE_DAYS,
+  resolveArtDate,
+  resolveArtRange,
+  type Clock,
+} from "../../time/index.js";
+import {
+  ToolArgumentError,
   defineReadTool,
   defineWriteTool,
   type ToolDefinition,
@@ -9,7 +20,46 @@ import {
 } from "../registry.js";
 
 const FECHA_DESCRIPTION =
-  "Fecha en America/Argentina/Buenos_Aires: YYYY-MM-DD, o 'hoy' / 'mañana' / 'ayer'.";
+  "Fecha en America/Argentina/Buenos_Aires: YYYY-MM-DD, 'hoy', 'mañana', 'ayer' o un día de la semana ('el jueves').";
+
+/**
+ * Fresh ART anchors appended to the date tools' descriptions. The model never
+ * does date math: it copies a resolved date or passes the Spanish phrase and the
+ * tool resolves it with the real clock.
+ */
+export function artDateHint(clock: Clock): string {
+  const week = artWeekRange(clock);
+  return `Anclas de fecha (ART): hoy=${artToday(
+    clock,
+  )}, mañana=${artTomorrow(clock)}, esta semana=${week.from}..${week.to}.`;
+}
+
+function resolveDateOrArgumentError(
+  toolName: string,
+  input: string | undefined,
+  clock: Clock,
+): string {
+  try {
+    return resolveArtDate(input, clock);
+  } catch (error) {
+    if (error instanceof InvalidDateError) throw new ToolArgumentError(toolName, error.message);
+    throw error;
+  }
+}
+
+function resolveRangeOrArgumentError(
+  toolName: string,
+  from: string | undefined,
+  to: string | undefined,
+  clock: Clock,
+) {
+  try {
+    return resolveArtRange(from, to, clock);
+  } catch (error) {
+    if (error instanceof InvalidRangeError) throw new ToolArgumentError(toolName, error.message);
+    throw error;
+  }
+}
 
 /** Looks the appointment up when the caller knows its day, to enrich the proposal. */
 async function findAppointment(
@@ -18,9 +68,13 @@ async function findAppointment(
   appointmentId: string,
 ): Promise<Appointment | undefined> {
   if (!fecha) return undefined;
-  const date = resolveArtDate(fecha, context.clock);
-  const appointments = await context.backend.delDia(date);
-  return appointments.find((appointment) => appointment.id === appointmentId);
+  try {
+    const date = resolveArtDate(fecha, context.clock);
+    const appointments = await context.backend.delDia(date);
+    return appointments.find((appointment) => appointment.id === appointmentId);
+  } catch {
+    return undefined;
+  }
 }
 
 function describeAppointment(appointment: Appointment, status = appointment.status): string {
@@ -29,8 +83,8 @@ function describeAppointment(appointment: Appointment, status = appointment.stat
 }
 
 /**
- * `turnos.*` tools (PRD 30a). Reads hit the booking backend directly; the only
- * write returns a proposal and never touches the backend.
+ * `turnos.*` / `pagos.*` tools (PRD 30a). Reads hit the booking backend
+ * directly; the only write returns a proposal and never touches the backend.
  */
 export function createTurnosTools(): ToolDefinition[] {
   return [
@@ -43,10 +97,37 @@ export function createTurnosTools(): ToolDefinition[] {
       schema: z.object({
         fecha: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, hoy.`),
       }),
+      hint: artDateHint,
       async handler(args, context) {
-        const fecha = resolveArtDate(args.fecha, context.clock);
+        const fecha = resolveDateOrArgumentError("turnos.del_dia", args.fecha, context.clock);
         const turnos = await context.backend.delDia(fecha);
         return { content: JSON.stringify({ fecha, turnos }), data: turnos };
+      },
+    }),
+
+    defineReadTool({
+      name: "turnos.rango",
+      title: "Turnos de un rango",
+      description:
+        `Lista los turnos entre dos fechas, ambas incluidas (máximo ${MAX_RANGE_DAYS} días). ` +
+        "Usala para 'esta semana' o 'la semana que viene', pasando esas palabras en `desde` sin `hasta`.",
+      schema: z.object({
+        desde: z.string().optional().describe(`${FECHA_DESCRIPTION} o 'esta semana'.`),
+        hasta: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, igual a 'desde'.`),
+      }),
+      hint: artDateHint,
+      async handler(args, context) {
+        const range = resolveRangeOrArgumentError(
+          "turnos.rango",
+          args.desde,
+          args.hasta,
+          context.clock,
+        );
+        const turnos = await context.backend.rango(range.from, range.to);
+        return {
+          content: JSON.stringify({ desde: range.from, hasta: range.to, turnos }),
+          data: turnos,
+        };
       },
     }),
 
@@ -54,18 +135,24 @@ export function createTurnosTools(): ToolDefinition[] {
       name: "turnos.disponibilidad",
       title: "Disponibilidad del día",
       description:
-        "Lista los horarios libres y ocupados de una fecha, para ofrecerle un turno a una clienta.",
+        "Lista los horarios libres y ocupados de una fecha, para ofrecerle un turno a una clienta. " +
+        "Sin fecha usa hoy (America/Argentina/Buenos_Aires).",
       schema: z.object({
-        fecha: z.string().describe(`${FECHA_DESCRIPTION} Requerida.`),
+        fecha: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, hoy.`),
       }),
+      hint: artDateHint,
       async handler(args, context) {
-        const fecha = resolveArtDate(args.fecha, context.clock);
+        const fecha = resolveDateOrArgumentError(
+          "turnos.disponibilidad",
+          args.fecha,
+          context.clock,
+        );
         const horarios = await context.backend.disponibilidad(fecha);
         return {
           content: JSON.stringify({
             fecha,
             horarios,
-            libres: horarios.filter((s) => s.available).map((s) => s.time),
+            libres: horarios.filter((slot) => slot.available).map((slot) => slot.time),
           }),
           data: horarios,
         };
@@ -80,6 +167,41 @@ export function createTurnosTools(): ToolDefinition[] {
       async handler(_args, context) {
         const servicios = await context.backend.servicios();
         return { content: JSON.stringify({ servicios }), data: servicios };
+      },
+    }),
+
+    defineReadTool({
+      name: "turnos.pagos_pendientes",
+      title: "Pagos por revisar",
+      description:
+        "Lista las transferencias y comprobantes que esperan revisión, más el resumen de reintegros pendientes.",
+      schema: z.object({}),
+      async handler(_args, context) {
+        const data = await context.backend.pagosPendientes();
+        return {
+          content: JSON.stringify({
+            verificaciones: data.verificaciones,
+            reintegros: data.reintegros,
+          }),
+          data,
+        };
+      },
+    }),
+
+    defineReadTool({
+      name: "turnos.resumen",
+      title: "Resumen del día",
+      description:
+        "Resumen de un día: cantidad de turnos por estado, seña facturada, pagos por revisar y reintegros pendientes. " +
+        "Sin fecha usa hoy.",
+      schema: z.object({
+        fecha: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, hoy.`),
+      }),
+      hint: artDateHint,
+      async handler(args, context) {
+        const fecha = resolveDateOrArgumentError("turnos.resumen", args.fecha, context.clock);
+        const resumen = await context.backend.resumen(fecha);
+        return { content: JSON.stringify(resumen), data: resumen };
       },
     }),
 
@@ -104,7 +226,11 @@ export function createTurnosTools(): ToolDefinition[] {
           args.motivo ? ` (motivo: ${args.motivo})` : ""
         }`;
         const before = appointment ? describeAppointment(appointment) : args.appointmentId;
-        const diff = `- ${before}\n+ ${appointment ? describeAppointment(appointment, "cancelled") : `${args.appointmentId} · cancelled`}`;
+        const diff = `- ${before}\n+ ${
+          appointment
+            ? describeAppointment(appointment, "cancelled")
+            : `${args.appointmentId} · cancelled`
+        }`;
 
         const proposal = context.proposals.create({
           chatId: context.chatId,

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AuditLogger, type AuditEntry } from "../src/audit/index.js";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AuditLogger, createFileSink, type AuditEntry } from "../src/audit/index.js";
 import { redactArgs, shortClientName } from "../src/audit/pii.js";
 import { fixedClock } from "../src/time/index.js";
 
@@ -40,6 +43,26 @@ describe("audit logger", () => {
       model: "deepseek-v4-flash",
       tokens: { prompt: 120, completion: 8, total: 128 },
     });
+  });
+
+  it("appends JSONL to a file when a file sink is configured", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mena-audit-"));
+    const file = join(dir, "audit.log");
+    try {
+      const logger = new AuditLogger({
+        sink: createFileSink(file),
+        clock: fixedClock("2026-01-15T01:30:00Z"),
+      });
+      logger.log({ event: "llm_turn", profile: "romi", status: "ok" });
+      logger.log({ event: "tool_call", profile: "romi", tool: "turnos.servicios", status: "ok" });
+
+      const lines = readFileSync(file, "utf8").trim().split("\n");
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({ event: "llm_turn", profile: "romi" });
+      expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({ tool: "turnos.servicios" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("records a dropped chat without message content and without the raw chat id", () => {

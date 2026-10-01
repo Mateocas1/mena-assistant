@@ -1,4 +1,4 @@
-import { addDays, artToday, nextWeekday, type Clock } from "../src/time/index.js";
+import { addDays, artToday, nextWeekday, resolveArtRange, type Clock } from "../src/time/index.js";
 import type { LlmCompletion, LlmCompletionRequest, LlmTransport } from "../src/llm/types.js";
 
 export interface PlannedToolCall {
@@ -16,14 +16,14 @@ const WEEKDAYS: Readonly<Record<string, number>> = {
   domingo: 6,
 };
 
-function normalize(text: string): string {
+export function normalize(text: string): string {
   return text
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/** Extracts the date expression a Spanish question carries, in ART. */
+/** Extracts the single date expression a Spanish question carries, in ART. */
 export function extractDate(question: string, clock: Clock): string | undefined {
   const text = normalize(question);
   const today = artToday(clock);
@@ -43,11 +43,37 @@ export function extractDate(question: string, clock: Clock): string | undefined 
   return undefined;
 }
 
+const RANGO_PATTERN =
+  /(esta semana|semana actual|semana que viene|proxima semana|semana proxima|rango|desde el |entre el )/;
+const PAGOS_PATTERN = /(pago|transferencia|reintegro|verificacion|comprobante)/;
+const RESUMEN_PATTERN = /(resumen|recaudacion|balance|factur|numeros|como venimos)/;
+const DISPONIBILIDAD_PATTERN = /(disponibilidad|libres?|horario)/;
+const SERVICIOS_PATTERN = /(servicio|precio)/;
+const DEL_DIA_PATTERN = /(turno|agenda|del dia|el dia)/;
+
+function planRangeArgs(text: string, question: string, clock: Clock): Record<string, unknown> {
+  if (/semana que viene|proxima semana|semana proxima/.test(text)) {
+    const range = resolveArtRange("la semana que viene", undefined, clock);
+    return { desde: range.from, hasta: range.to };
+  }
+  if (/esta semana|semana actual/.test(text)) {
+    const range = resolveArtRange("esta semana", undefined, clock);
+    return { desde: range.from, hasta: range.to };
+  }
+
+  const isoDates = text.match(/\d{4}-\d{2}-\d{2}/g) ?? [];
+  if (isoDates.length >= 2) return { desde: isoDates[0], hasta: isoDates[1] };
+  if (isoDates.length === 1) return { desde: isoDates[0], hasta: isoDates[0] };
+
+  const date = extractDate(question, clock);
+  return date ? { desde: date, hasta: date } : {};
+}
+
 /**
  * The deterministic stand-in for the model used by `pnpm eval` in CI. It is not
- * a quality measurement of any real model; it locks the tool-selection and
- * argument-resolution plumbing (including ART relative dates) so regressions
- * fail in CI. `pnpm eval:live` runs the same dataset against a real model.
+ * a quality measurement of any real model; it locks tool selection and argument
+ * resolution (especially ART date phrases) so regressions fail in CI.
+ * `pnpm eval:live` runs the same dataset against a real model.
  */
 export function planToolCall(
   question: string,
@@ -58,7 +84,20 @@ export function planToolCall(
   const has = (name: string) => availableTools.includes(name);
   const fecha = extractDate(question, clock);
 
-  if (/(disponibilidad|libres?|horario)/.test(text) && has("turnos.disponibilidad")) {
+  if (RANGO_PATTERN.test(text) && has("turnos.rango")) {
+    return { tool: "turnos.rango", args: planRangeArgs(text, question, clock) };
+  }
+
+  if (PAGOS_PATTERN.test(text) && has("turnos.pagos_pendientes")) {
+    return { tool: "turnos.pagos_pendientes", args: {} };
+  }
+
+  if (RESUMEN_PATTERN.test(text) && has("turnos.resumen")) {
+    return { tool: "turnos.resumen", args: fecha ? { fecha } : {} };
+  }
+
+  if (DISPONIBILIDAD_PATTERN.test(text) && has("turnos.disponibilidad")) {
+    // No date phrase? Forward nothing: the tool defaults to today server-side.
     return { tool: "turnos.disponibilidad", args: fecha ? { fecha } : {} };
   }
 
@@ -67,11 +106,11 @@ export function planToolCall(
     return { tool: "turnos.cancelar", args: appointmentId ? { appointmentId } : {} };
   }
 
-  if (/(servicio|precio)/.test(text) && has("turnos.servicios")) {
+  if (SERVICIOS_PATTERN.test(text) && has("turnos.servicios")) {
     return { tool: "turnos.servicios", args: {} };
   }
 
-  if (/(turno|agenda|del dia|el dia)/.test(text) && has("turnos.del_dia")) {
+  if (DEL_DIA_PATTERN.test(text) && has("turnos.del_dia")) {
     return { tool: "turnos.del_dia", args: fecha ? { fecha } : {} };
   }
 

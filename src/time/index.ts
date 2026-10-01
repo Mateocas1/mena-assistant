@@ -112,25 +112,146 @@ export function artWeekRange(clock: Clock = systemClock): ArtWeekRange {
   return { from: monday, to: addDays(monday, 6) };
 }
 
-const RELATIVE_DATES: Readonly<Record<string, -1 | 0 | 1>> = {
+const RELATIVE_DATES: Readonly<Record<string, -1 | 0 | 1 | 2>> = {
   hoy: 0,
   manana: 1,
-  mañana: 1,
+  "pasado manana": 2,
   ayer: -1,
 };
 
+const WEEKDAY_PHRASES: Readonly<Record<string, number>> = {
+  lunes: 0,
+  martes: 1,
+  miercoles: 2,
+  jueves: 3,
+  viernes: 4,
+  sabado: 5,
+  domingo: 6,
+};
+
+/** `0` = this week, `1` = next week. */
+const WEEK_PHRASES: Readonly<Record<string, 0 | 1>> = {
+  "esta semana": 0,
+  "semana actual": 0,
+  "la semana": 0,
+  "la semana que viene": 1,
+  "semana que viene": 1,
+  "proxima semana": 1,
+  "la proxima semana": 1,
+  "semana proxima": 1,
+};
+
+/** Lowercases and strips Spanish diacritics so phrase matching is stable. */
+function normalizeText(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function weekOffsetForPhrase(input: string | undefined): 0 | 1 | undefined {
+  if (input === undefined) return undefined;
+  return WEEK_PHRASES[normalizeText(input)];
+}
+
+/** Longest range `turnos.rango` accepts, in calendar days (inclusive). */
+export const MAX_RANGE_DAYS = 31;
+
+/** A closed ART date range, `YYYY-MM-DD` inclusive on both ends. */
+export interface ArtDateRange {
+  readonly from: string;
+  readonly to: string;
+}
+
+/** Raised when a requested range is inverted or longer than {@link MAX_RANGE_DAYS}. */
+export class InvalidRangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidRangeError";
+  }
+}
+
 /**
- * Resolves what the model (or a human) means by a date: `undefined`/`""` and
- * the Spanish relatives map to ART days; `YYYY-MM-DD` passes through.
+ * Resolves a single date. Accepts `YYYY-MM-DD`, `hoy` / `mañana` / `pasado
+ * mañana` / `ayer` and weekday names (`el jueves` → the next Thursday).
  */
 export function resolveArtDate(input: string | undefined, clock: Clock = systemClock): string {
   if (input === undefined || input.trim().length === 0) return artToday(clock);
 
-  const normalized = input.trim().toLowerCase();
+  const normalized = normalizeText(input);
+
   const relative = RELATIVE_DATES[normalized];
   if (relative !== undefined) return addDays(artToday(clock), relative);
+
+  for (const [name, index] of Object.entries(WEEKDAY_PHRASES)) {
+    if (new RegExp(`\\b${name}\\b`).test(normalized)) {
+      return nextWeekday(artToday(clock), index);
+    }
+  }
 
   if (parseIsoDate(normalized) !== null) return normalized;
 
   throw new InvalidDateError(input);
+}
+
+function assertRange(from: string, to: string): void {
+  if (from > to) throw new InvalidRangeError(`el rango ${from}..${to} está invertido`);
+
+  const fromTime = parseIsoDate(from);
+  const toTime = parseIsoDate(to);
+  if (fromTime === null || toTime === null) throw new InvalidDateError(`${from}..${to}`);
+
+  const days = Math.round((toTime - fromTime) / MS_PER_DAY) + 1;
+  if (days > MAX_RANGE_DAYS) {
+    throw new InvalidRangeError(`el rango pide ${days} días y el máximo es ${MAX_RANGE_DAYS}`);
+  }
+}
+
+/**
+ * Resolves a date range. `esta semana` / `la semana que viene` (in either end,
+ * never mixed with an explicit date) expand to the full ART week; otherwise both
+ * ends go through {@link resolveArtDate}, with `to` defaulting to `from`.
+ */
+export function resolveArtRange(
+  from: string | undefined,
+  to: string | undefined,
+  clock: Clock = systemClock,
+): ArtDateRange {
+  const fromWeek = weekOffsetForPhrase(from);
+  const toWeek = weekOffsetForPhrase(to);
+
+  if (fromWeek !== undefined || toWeek !== undefined) {
+    if (fromWeek !== undefined && toWeek !== undefined) {
+      throw new InvalidRangeError("no se pueden combinar dos rangos de semana");
+    }
+    const other = fromWeek !== undefined ? to : from;
+    if (other !== undefined && other.trim().length > 0) {
+      throw new InvalidRangeError("no se puede combinar 'esta semana' con una fecha explícita");
+    }
+
+    const base = artWeekRange(clock);
+    const shift = 7 * (fromWeek ?? toWeek ?? 0);
+    return { from: addDays(base.from, shift), to: addDays(base.to, shift) };
+  }
+
+  const start = resolveArtDate(from, clock);
+  const end = resolveArtDate(to ?? from, clock);
+  assertRange(start, end);
+  return { from: start, to: end };
+}
+
+/** ISO-8601 week label in ART, used by the usage metrics: `2026-W03`. */
+export function isoWeekLabel(isoDate: string): string {
+  const thursday = addDays(isoDate, 3 - weekdayIndex(isoDate));
+  const year = Number(thursday.slice(0, 4));
+  const jan4 = `${year}-01-04`;
+  const week1Thursday = addDays(jan4, 3 - weekdayIndex(jan4));
+  const thursdayTime = parseIsoDate(thursday);
+  const week1Time = parseIsoDate(week1Thursday);
+  if (thursdayTime === null || week1Time === null) throw new InvalidDateError(isoDate);
+
+  const week = 1 + Math.round((thursdayTime - week1Time) / (7 * MS_PER_DAY));
+  return `${year}-W${String(week).padStart(2, "0")}`;
 }

@@ -10,9 +10,11 @@ Romi (the salon owner) asks in a Telegram chat — "¿qué turnos tengo hoy?",
 and the assistant answers with real data and, for anything that mutates, returns
 a **proposal** she confirms with an inline **Confirmar / Cancelar** button.
 
-**Status: M0 (skeleton).** Reads run against a fixture-backed mock that mirrors
-the real `test-kimi` `/assistant/*` contract shapes, so M1 only swaps the
-transport. `stock.*` and `tareas.*` are disabled stubs behind feature flags.
+**Status: M1 (real reads).** The `turnos.*` read tools run against the real
+`mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP actions when
+`TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors the same
+contract shapes (`mock`, the dev/CI default). Writes stay confirm-gated, and
+`stock.*` / `tareas.*` are disabled stubs behind feature flags.
 
 ## Architecture
 
@@ -32,7 +34,8 @@ Telegram (Romi, Mateo)
                 ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ mena-assistant-mcp                                           │
-│  ├─ turnos.*  → 30a backend (M0: mock fixtures)              │
+│  ├─ turnos.*  → 30a backend: TURNOS_BACKEND=http (real)     │
+│  │              or mock fixtures (dev/CI)                    │
 │  ├─ stock.*   → mena-nails API Go        [FEATURE_STOCK, M3] │
 │  └─ tareas.*  → Firestore Admin (Mateo)  [FEATURE_TAREAS, M5]│
 │  + proposals (Confirm/Cancel) + audit + ART timezone + PII   │
@@ -48,7 +51,8 @@ Write tools never reach the backend from the model. They return a proposal
 ```
 src/
   config.ts             Zod-parsed env, fail fast on invalid config
-  index.ts              bot entrypoint (long polling)
+  index.ts              entrypoint: bot, --check, --healthcheck
+  health.ts             liveness heartbeat + offline run modes
   bot/
     allowlist.ts        chat_id → profile + tool permission globs
     core.ts             message + callback decision logic (fully tested)
@@ -57,20 +61,27 @@ src/
     registry.ts         tool definitions + profile filtering + OpenAI specs
     server.ts           MCP server over the filtered registry
     main.ts             stdio MCP entrypoint
-    tools/turnos.ts     turnos.* tools (3 reads + 1 confirmation-gated write)
+    tools/turnos.ts     turnos.* tools (6 reads + 1 confirmation-gated write)
   llm/
     types.ts            transport seam (real client or scripted in tests)
     openai-transport.ts OpenAI-compatible client (LLM_BASE_URL/API_KEY/MODEL)
     loop.ts             bounded tool loop (retry, timeout, fallback, cap 6)
     prompt.ts           system prompt (ART dates, injection, no writes)
   adapters/
-    turnos/             client interface, fixtures, mock backend
+    turnos/client.ts    contract types + typed errors
+    turnos/http.ts      real /assistant/* client (retry, timeout, Zod)
+    turnos/mock.ts      fixture backend with the same semantics
+    turnos/fixtures.ts  fixtures anchored on the clock's ART day
     stock/ tareas/      disabled stubs behind feature flags
   proposals/store.ts    proposal registry (expiry + single use + chat bound)
-  audit/                JSON-line audit, PII redaction
+  audit/                JSONL audit, PII redaction, file sink
+  metrics/usage.ts      queries per profile per ISO week
   time/                 America/Argentina/Buenos_Aires + injectable clock
-evals/                  20-case dataset, scripted (CI) and live runners
+evals/                  40-case dataset, scripted (CI) and live runners
+scripts/metrics.ts      pnpm metrics CLI
 tests/                  vitest suites
+Dockerfile              multi-stage, non-root, node dist/index.js
+compose.assistant.yml   assistant service snippet for the VM compose
 ```
 
 ## Quick start (mock backend)
@@ -80,13 +91,15 @@ Requirements: Node 24 and pnpm 11.
 ```bash
 pnpm install
 cp .env.example .env      # fill in the values below
-pnpm test                 # 90 tests
-pnpm eval                 # 20/20 (scripted, deterministic)
+pnpm test                 # 146 tests
+pnpm eval                 # 40/40 (scripted, deterministic)
 pnpm dev                  # long polling with the mock backend
 ```
 
-With `TURNOS_ADAPTER=mock` (the default) no external backend is needed: the
-three read tools serve fixtures anchored on today's ART date.
+With `TURNOS_BACKEND=mock` (the default) no external backend is needed: the read
+tools serve fixtures anchored on today's ART date. Point
+`TURNOS_BACKEND=http` + `ASSISTANT_API_BASE_URL` + `ASSISTANT_TOKEN` at the real
+`/assistant/*` actions to read production data.
 
 ### Create the Telegram bot and get chat ids
 
@@ -104,38 +117,50 @@ three read tools serve fixtures anchored on today's ART date.
 
 ## Environment variables
 
-| Variable               | Default                       | Purpose                                                |
-| ---------------------- | ----------------------------- | ------------------------------------------------------ |
-| `TELEGRAM_BOT_TOKEN`   | — (required)                  | BotFather token.                                       |
-| `TELEGRAM_ALLOWLIST`   | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.       |
-| `LLM_BASE_URL`         | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                            |
-| `LLM_API_KEY`          | — (required)                  | Provider key.                                          |
-| `LLM_MODEL`            | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.** |
-| `LLM_FALLBACK_MODEL`   | `glm5.3-flash`                | Retried when the primary call fails.                   |
-| `LLM_TIMEOUT_MS`       | `30000`                       | Per-call timeout.                                      |
-| `LLM_MAX_TOOL_CALLS`   | `6`                           | Hard cap of tool calls per conversation turn.          |
-| `TURNOS_ADAPTER`       | `mock`                        | `mock` in M0; `http` (30a) lands in M1.                |
-| `ASSISTANT_BASE_URL`   | —                             | Required when `TURNOS_ADAPTER=http`.                   |
-| `ASSISTANT_TOKEN`      | —                             | Bearer token for `/assistant/*`; required with `http`. |
-| `FEATURE_TURNOS`       | `true`                        | Registers `turnos.*`.                                  |
-| `FEATURE_STOCK`        | `false`                       | Registers `stock.*` (stub until M3).                   |
-| `FEATURE_TAREAS`       | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).      |
-| `PROPOSAL_TTL_MINUTES` | `10`                          | Proposal lifetime before the Confirm button dies.      |
-| `MCP_PROFILE`          | `mateo`                       | Profile the standalone MCP server acts as.             |
+| Variable                  | Default                       | Purpose                                                    |
+| ------------------------- | ----------------------------- | ---------------------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN`      | — (required)                  | BotFather token.                                           |
+| `TELEGRAM_ALLOWLIST`      | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.           |
+| `LLM_BASE_URL`            | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                |
+| `LLM_API_KEY`             | — (required)                  | Provider key.                                              |
+| `LLM_MODEL`               | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.**     |
+| `LLM_FALLBACK_MODEL`      | `glm5.3-flash`                | Retried when the primary call fails.                       |
+| `LLM_TIMEOUT_MS`          | `30000`                       | Per-call timeout.                                          |
+| `LLM_MAX_TOOL_CALLS`      | `6`                           | Hard cap of tool calls per conversation turn.              |
+| `TURNOS_BACKEND`          | `mock`                        | `mock` (fixtures) or `http` (real `/assistant/*`).         |
+| `ASSISTANT_API_BASE_URL`  | —                             | Convex `.convex.site` origin; required with `http`.        |
+| `ASSISTANT_TOKEN`         | —                             | Bearer token for `/assistant/*`; required with `http`.     |
+| `TURNOS_TIMEOUT_MS`       | `10000`                       | Per-request timeout for the booking backend.               |
+| `FEATURE_TURNOS`          | `true`                        | Registers `turnos.*`.                                      |
+| `FEATURE_STOCK`           | `false`                       | Registers `stock.*` (stub until M3).                       |
+| `FEATURE_TAREAS`          | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).          |
+| `PROPOSAL_TTL_MINUTES`    | `10`                          | Proposal lifetime before the Confirm button dies.          |
+| `AUDIT_LOG_FILE`          | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`. |
+| `HEALTH_FILE`             | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.      |
+| `HEALTH_INTERVAL_SECONDS` | `30`                          | Heartbeat interval; three missed beats = unhealthy.        |
+| `MCP_PROFILE`             | `mateo`                       | Profile the standalone MCP server acts as.                 |
 
-Invalid configuration fails fast at startup with the offending variables named.
+Invalid configuration fails fast at startup with the offending variables named
+(`node dist/index.js --check` validates without starting the bot).
 
-## Tools (M0)
+## Tools (M1)
 
-| Tool                                              | Kind                 | Backend route it mirrors              |
-| ------------------------------------------------- | -------------------- | ------------------------------------- |
-| `turnos.del_dia(fecha?)`                          | read                 | `POST /assistant/appointments/day`    |
-| `turnos.disponibilidad(fecha)`                    | read                 | `POST /assistant/availability`        |
-| `turnos.servicios()`                              | read                 | `POST /assistant/services`            |
-| `turnos.cancelar(appointmentId, motivo?, fecha?)` | **write → proposal** | `POST /assistant/appointments/cancel` |
+| Tool                                              | Kind                 | Backend route it mirrors                        |
+| ------------------------------------------------- | -------------------- | ----------------------------------------------- |
+| `turnos.del_dia(fecha?)`                          | read                 | `POST /assistant/appointments/today` or `/day`  |
+| `turnos.rango(desde?, hasta?)`                    | read                 | `POST /assistant/appointments/range` (≤31 days) |
+| `turnos.disponibilidad(fecha?)`                   | read                 | `POST /assistant/availability`                  |
+| `turnos.servicios()`                              | read                 | `POST /assistant/services`                      |
+| `turnos.pagos_pendientes()`                       | read                 | `/verifications/pending` + `/refunds/summary`   |
+| `turnos.resumen(fecha?)`                          | read                 | `POST /assistant/summary`                       |
+| `turnos.cancelar(appointmentId, motivo?, fecha?)` | **write → proposal** | `POST /assistant/appointments/cancel`           |
 
-`fecha` accepts `YYYY-MM-DD` or `hoy` / `mañana` / `ayer`, always resolved in
-`America/Argentina/Buenos_Aires`.
+Dates accept `YYYY-MM-DD`, `hoy` / `mañana` / `pasado mañana` / `ayer`, weekday
+names (`el jueves`) and `esta semana` / `la semana que viene` (ranges), always
+resolved in `America/Argentina/Buenos_Aires` by the time module. The model never
+does date math: every date tool's description carries fresh ART anchors
+(`hoy=…`, `mañana=…`, `esta semana=…`) and the tool resolves whatever phrase
+comes back.
 
 ### Proposal → Confirm flow
 
@@ -165,15 +190,63 @@ button, so its proposals expire unless confirmed from the bot.
 ## Evals
 
 ```bash
-pnpm eval        # 20 cases, scripted transport + mock backend, deterministic, in CI
+pnpm eval        # 40 cases, scripted transport + mock backend, deterministic, in CI
 pnpm eval:live   # same dataset against a real model (needs LLM_API_KEY; never in CI)
 ```
 
-Current result: **20/20 passed · tool accuracy 100.0% · args accuracy 100.0%**
+Current result: **40/40 passed · tool accuracy 100.0% · args accuracy 100.0%**
 (scripted). The scripted transport is not a model-quality measurement: it pins
 tool selection and ART argument resolution so regressions fail in CI. Model
 comparison (`deepseek-v4-flash` vs `qwen3.8-flash` vs `glm5.3-flash` vs
 `qwen3.6`) runs through `eval:live` and belongs to M4.
+
+## Metrics
+
+The bot writes one JSON line per event (see audit below). When `AUDIT_LOG_FILE`
+is set, it appends there; `pnpm metrics` reads that file and reports queries and
+tool calls per profile per ISO week (ART calendar, e.g. `2026-W03`), plus dropped
+chats. It is what proves "Romi uses it weekly":
+
+```bash
+pnpm metrics ./audit.log
+# profile  week       queries   tools
+# romi      2026-W03        12      20
+#
+# dropped chats: 0
+# weeks with queries: 1 — the assistant is in weekly use
+```
+
+## Deploy
+
+The assistant runs **next to the backend, on the mena-nails VM**, inside the
+production compose (PRD 25). Long polling means it needs no public ingress, and
+the backend is reached over the internal Docker network — no published ports.
+
+1. Copy this repo next to the mena-nails compose (e.g. `./mena-assistant`).
+2. Create `./secrets/assistant.env` (mode `600`, never committed) with the
+   Telegram token and allowlist, `LLM_API_KEY`, `TURNOS_BACKEND=http`,
+   `ASSISTANT_API_BASE_URL` (the Convex `.convex.site` origin) and
+   `ASSISTANT_TOKEN`.
+3. Merge `compose.assistant.yml` into the compose already running on the VM (or
+   pass it as an extra `-f` sharing the `internal` network) and `docker compose
+up -d assistant`.
+
+The image is a multi-stage build that compiles with `pnpm build`, prunes dev
+dependencies and runs `node dist/index.js` as the non-root `assistant` user:
+
+```bash
+docker build -t mena-assistant:m1 .
+docker run --rm --env-file ./secrets/assistant.env mena-assistant:m1 \
+  node dist/index.js --check          # config only: no Telegram, no network
+```
+
+The `HEALTHCHECK` is offline too: the process touches `HEALTH_FILE` every
+`HEALTH_INTERVAL_SECONDS` and `node dist/index.js --healthcheck` fails when the
+heartbeat is missing or older than three intervals. Secrets never enter the
+image; they come from `env_file` on the VM.
+
+Rollback: `docker compose up -d assistant` with the previous image tag, or
+`TURNOS_BACKEND=mock` to fall back to fixtures without redeploying code.
 
 ## Security rules (non-negotiable)
 
@@ -197,7 +270,7 @@ comparison (`deepseek-v4-flash` vs `qwen3.8-flash` vs `glm5.3-flash` vs
 ## Testing and CI
 
 ```bash
-pnpm lint && pnpm typecheck && pnpm test && pnpm eval
+pnpm lint && pnpm typecheck && pnpm test && pnpm eval && pnpm build
 ```
 
 `.github/workflows/ci.yml` pins every action by SHA and runs format check, lint,
@@ -210,7 +283,7 @@ Checked against <https://nan.builders/docs/models>:
 - `deepseek-v4-flash` (default) and `glm5.3-flash` (fallback) are real ids on
   the OpenAI-compatible `https://api.nan.builders/v1` base URL, and both
   advertise standard function calling.
-- Caveats worth knowing before M1:
+- Caveats worth knowing:
   - `qwen3.8-flash` documents tool calling in **XML format**, not OpenAI
     `function.arguments`, so as a fallback it may return XML text instead of
     structured `tool_calls`. That is why the fallback default is
@@ -227,9 +300,9 @@ Checked against <https://nan.builders/docs/models>:
   `LLM_API_KEY`), so real tool-calling behaviour, latency and cost are unmeasured.
   The four-way model comparison belongs to M4.
 
-## Next step (M1)
+## Next step (M2)
 
-Implement `HttpTurnosClient` against `test-kimi` `/assistant/*` using the
-existing `TurnosClient` interface and response shapes, flip
-`TURNOS_ADAPTER=http`, add the remaining reads (`turnos.rango`,
-`turnos.pagos_pendientes`, `turnos.resumen`) and pick the model with live evals.
+Writes with confirmation (complete, cancel, block, confirm transferencia) plus
+the 8:00 ART daily summary and push alerts. M2 reuses the write path already in
+place: the tool proposes, the bot confirms, the adapter executes — only the
+`/assistant/appointments/*` and `/assistant/transfers/*` write routes are new.

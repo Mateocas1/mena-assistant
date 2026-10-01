@@ -20,7 +20,8 @@ describe("parseConfig", () => {
     expect(config.llm.timeoutMs).toBe(30_000);
     expect(config.llm.maxToolCalls).toBe(6);
 
-    expect(config.turnos.adapter).toBe("mock");
+    expect(config.turnos.backend).toBe("mock");
+    expect(config.turnos.timeoutMs).toBe(10_000);
     expect(config.features).toEqual({ turnos: true, stock: false, tareas: false });
     expect(config.proposalTtlMs).toBe(10 * 60_000);
   });
@@ -53,8 +54,17 @@ describe("parseConfig", () => {
     );
   });
 
-  it("fails fast when the http adapter is selected without credentials", () => {
-    expect(() => parseConfig({ ...baseEnv, TURNOS_ADAPTER: "http" })).toThrow(/ASSISTANT_BASE_URL/);
+  it("fails fast when the http backend is selected without credentials", () => {
+    expect(() => parseConfig({ ...baseEnv, TURNOS_BACKEND: "http" })).toThrow(
+      /ASSISTANT_API_BASE_URL/,
+    );
+    expect(() =>
+      parseConfig({
+        ...baseEnv,
+        TURNOS_BACKEND: "http",
+        ASSISTANT_API_BASE_URL: "https://demo.convex.site",
+      }),
+    ).toThrow(/ASSISTANT_TOKEN/);
   });
 
   it("fails fast on a non-numeric numeric env var", () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { TurnosNotConfiguredError } from "../src/adapters/turnos/client.js";
 import { AuditLogger, type AuditEntry } from "../src/audit/index.js";
 import { parseConfig } from "../src/config.js";
 import { CAP_REPLY, INVALID_ARGUMENTS_REPLY, runToolLoop } from "../src/llm/loop.js";
+import { buildSystemPrompt } from "../src/llm/prompt.js";
 import { LlmError } from "../src/llm/types.js";
 import { createToolRegistry } from "../src/mcp/tools/index.js";
 import { fixedClock } from "../src/time/index.js";
@@ -124,9 +126,9 @@ describe("LLM tool loop", () => {
 
   it("retries once when arguments fail schema validation", async () => {
     const { run } = setup([
-      // disponibilidad requires a fecha.
-      toolCallCompletion("turnos.disponibilidad", {}),
-      toolCallCompletion("turnos.disponibilidad", { fecha: "2026-01-14" }, "call_2"),
+      // fecha must be a string.
+      toolCallCompletion("turnos.del_dia", { fecha: 123 }),
+      toolCallCompletion("turnos.del_dia", { fecha: "hoy" }, "call_2"),
       textCompletion("Listo."),
     ]);
 
@@ -223,6 +225,50 @@ describe("LLM tool loop", () => {
     const result = await run();
 
     expect(result.toolCalls.map((call) => call.status)).toEqual(["proposal", "ok"]);
+  });
+
+  it("hands the model fresh ART date anchors in the tool descriptions", async () => {
+    const { run, transport } = setup([
+      toolCallCompletion("turnos.del_dia", {}),
+      textCompletion("ok"),
+    ]);
+
+    await run();
+
+    const specs = transport.requests[0]?.tools ?? [];
+    const delDia = specs.find((spec) => spec.function.name === "turnos.del_dia");
+    const servicios = specs.find((spec) => spec.function.name === "turnos.servicios");
+
+    // The loop uses the conversation clock (01:30 UTC = 22:30 ART on Jan 14).
+    expect(delDia?.function.description).toContain("hoy=2026-01-14");
+    expect(delDia?.function.description).toContain("esta semana=2026-01-12..2026-01-18");
+    expect(servicios?.function.description).not.toContain("hoy=");
+  });
+
+  it("anchors the ART dates in the system prompt", () => {
+    const prompt = buildSystemPrompt(fixedClock(TEST_INSTANT));
+    expect(prompt).toContain("Hoy es 2026-01-14");
+    expect(prompt).toContain("esta semana va del 2026-01-12 al 2026-01-18");
+    expect(prompt).toContain("No calcules fechas");
+  });
+
+  it("relays a typed adapter error's user-facing copy to the model", async () => {
+    const { run, transport, test } = setup([
+      toolCallCompletion("turnos.servicios", {}),
+      textCompletion("Aviso a Mateo."),
+    ]);
+    test.backend.servicios = async () => {
+      throw new TurnosNotConfiguredError();
+    };
+
+    const result = await run();
+
+    const toolMessage =
+      transport.requests[1]?.messages.find((message) => message.role === "tool") ?? undefined;
+    expect(toolMessage?.content).toContain("no está habilitado");
+    expect(result.reply).toBe("Aviso a Mateo.");
+    expect(result.toolCalls[0]).toMatchObject({ tool: "turnos.servicios", status: "error" });
+    expect(test.backend.cancelCalls).toEqual([]);
   });
 
   it("turns a write tool call into a proposal without executing it", async () => {

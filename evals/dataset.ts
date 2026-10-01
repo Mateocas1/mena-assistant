@@ -1,8 +1,9 @@
 import type { EvalCase } from "./types.js";
 
 /**
- * Evals v0: 20 Spanish questions. Dates are literal because the eval clock is
- * frozen at 2026-01-14 (a Wednesday) in ART — see `run.ts`.
+ * Evals: 40 Spanish questions (v0's 20 plus the M1 tools and date phrases).
+ * Dates are literal because the eval clock is frozen at 2026-01-14 (a Wednesday)
+ * in ART — see `run.ts`.
  */
 export const EVAL_CASES: readonly EvalCase[] = [
   {
@@ -140,6 +141,153 @@ export const EVAL_CASES: readonly EvalCase[] = [
   {
     id: "sin-tool-gracias",
     question: "Gracias!",
+    profile: "romi",
+    expectedTool: null,
+  },
+
+  // ── M1: date phrases ───────────────────────────────────────────────────────
+  {
+    id: "turnos-pasado-manana",
+    question: "¿Qué turnos hay pasado mañana?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-16" },
+  },
+  {
+    id: "turnos-miercoles",
+    question: "¿Qué turnos tengo el miércoles?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-21" },
+  },
+  {
+    id: "rango-esta-semana",
+    question: "¿Qué turnos tengo esta semana?",
+    profile: "romi",
+    expectedTool: "turnos.rango",
+    expectedArgs: { desde: "2026-01-12", hasta: "2026-01-18" },
+  },
+  {
+    id: "rango-semana-que-viene",
+    question: "Turnos de la semana que viene",
+    profile: "romi",
+    expectedTool: "turnos.rango",
+    expectedArgs: { desde: "2026-01-19", hasta: "2026-01-25" },
+  },
+  {
+    id: "rango-iso",
+    question: "Turnos desde el 2026-01-20 hasta el 2026-01-22",
+    profile: "romi",
+    expectedTool: "turnos.rango",
+    expectedArgs: { desde: "2026-01-20", hasta: "2026-01-22" },
+  },
+  {
+    id: "rango-palabra",
+    question: "Dame el rango del 2026-01-19 al 2026-01-21",
+    profile: "romi",
+    expectedTool: "turnos.rango",
+    expectedArgs: { desde: "2026-01-19", hasta: "2026-01-21" },
+  },
+
+  // ── M1: pagos.pendientes ───────────────────────────────────────────────────
+  {
+    id: "pagos-transferencias",
+    question: "¿Hay transferencias por revisar?",
+    profile: "romi",
+    expectedTool: "turnos.pagos_pendientes",
+    expectedArgs: {},
+  },
+  {
+    id: "pagos-pendientes",
+    question: "¿Hay pagos pendientes?",
+    profile: "romi",
+    expectedTool: "turnos.pagos_pendientes",
+    expectedArgs: {},
+  },
+  {
+    id: "pagos-comprobantes",
+    question: "¿Algo para revisar de comprobantes?",
+    profile: "romi",
+    expectedTool: "turnos.pagos_pendientes",
+    expectedArgs: {},
+  },
+  {
+    id: "pagos-reintegros",
+    question: "¿Tenés reintegros pendientes?",
+    profile: "romi",
+    expectedTool: "turnos.pagos_pendientes",
+    expectedArgs: {},
+  },
+
+  // ── M1: turnos.resumen ─────────────────────────────────────────────────────
+  {
+    id: "resumen-hoy",
+    question: "Pasame el resumen de hoy",
+    profile: "romi",
+    expectedTool: "turnos.resumen",
+    expectedArgs: { fecha: "2026-01-14" },
+  },
+  {
+    id: "resumen-como-venimos",
+    question: "¿Cómo venimos hoy?",
+    profile: "romi",
+    expectedTool: "turnos.resumen",
+    expectedArgs: { fecha: "2026-01-14" },
+  },
+  {
+    id: "resumen-lunes",
+    question: "Resumen del lunes",
+    profile: "romi",
+    expectedTool: "turnos.resumen",
+    expectedArgs: { fecha: "2026-01-19" },
+  },
+  {
+    id: "resumen-facturacion-ayer",
+    question: "¿Cuánto facturamos ayer?",
+    profile: "romi",
+    expectedTool: "turnos.resumen",
+    expectedArgs: { fecha: "2026-01-13" },
+  },
+  {
+    id: "resumen-numeros-iso",
+    question: "Números del 2026-01-20",
+    profile: "romi",
+    expectedTool: "turnos.resumen",
+    expectedArgs: { fecha: "2026-01-20" },
+  },
+
+  // ── M1: more phrasings and no-tool cases ───────────────────────────────────
+  {
+    id: "disponibilidad-sin-fecha",
+    question: "¿Qué horarios tenés?",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: {},
+  },
+  {
+    id: "disponibilidad-sabado",
+    question: "Horarios para el sábado",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: { fecha: "2026-01-17" },
+  },
+  {
+    id: "servicios-retiro-precio",
+    question: "¿Cuál es el precio del retiro de capping?",
+    profile: "romi",
+    expectedTool: "turnos.servicios",
+    expectedArgs: {},
+  },
+  {
+    id: "del-dia-agenda-manana",
+    question: "Mostrame la agenda de mañana",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-15" },
+  },
+  {
+    id: "sin-tool-ayuda",
+    question: "¿Me podés ayudar con algo?",
     profile: "romi",
     expectedTool: null,
   },

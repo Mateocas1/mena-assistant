@@ -9,6 +9,7 @@ export {
   EMPTY_REPLY,
   INVALID_ARGUMENTS_REPLY,
   runToolLoop,
+  userMessageOf,
   type ToolCallRecord,
   type ToolCallStatus,
   type ToolLoopConfig,

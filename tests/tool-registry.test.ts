@@ -4,7 +4,18 @@ import {
   createTareasTools,
   createTurnosTools,
 } from "../src/mcp/tools/index.js";
-import { ToolRegistry } from "../src/mcp/registry.js";
+import { ToolRegistry, serializeTools } from "../src/mcp/registry.js";
+import { fixedClock } from "../src/time/index.js";
+
+const ROMI_TOOL_NAMES = [
+  "turnos.del_dia",
+  "turnos.rango",
+  "turnos.disponibilidad",
+  "turnos.servicios",
+  "turnos.pagos_pendientes",
+  "turnos.resumen",
+  "turnos.cancelar",
+];
 
 describe("ToolRegistry", () => {
   it("never shows tareas.* to romi", () => {
@@ -39,13 +50,29 @@ describe("ToolRegistry", () => {
 
   it("registers the enabled adapters and filters them by profile", () => {
     const registry = createToolRegistry({ turnos: true, stock: false, tareas: true });
-    expect(registry.forProfile("romi").map((tool) => tool.name)).toEqual([
-      "turnos.del_dia",
-      "turnos.disponibilidad",
-      "turnos.servicios",
-      "turnos.cancelar",
-    ]);
+    expect(registry.forProfile("romi").map((tool) => tool.name)).toEqual(ROMI_TOOL_NAMES);
     expect(registry.forProfile("mateo").map((tool) => tool.name)).toContain("tareas.listar");
+  });
+
+  it("appends fresh ART date anchors to the date tools only", () => {
+    const registry = createToolRegistry({ turnos: true, stock: false, tareas: false });
+    const clock = fixedClock("2026-01-15T01:30:00Z"); // 2026-01-14 22:30 ART
+    const specs = registry.toOpenAiTools("romi", clock);
+
+    const descriptionOf = (name: string) =>
+      specs.find((spec) => spec.function.name === name)?.function.description ?? "";
+
+    expect(descriptionOf("turnos.del_dia")).toContain("hoy=2026-01-14");
+    expect(descriptionOf("turnos.del_dia")).toContain("mañana=2026-01-15");
+    expect(descriptionOf("turnos.rango")).toContain("esta semana=2026-01-12..2026-01-18");
+    expect(descriptionOf("turnos.resumen")).toContain("hoy=2026-01-14");
+    expect(descriptionOf("turnos.servicios")).not.toContain("Anclas de fecha");
+  });
+
+  it("serialises the same tools with the default clock when none is given", () => {
+    const registry = createToolRegistry({ turnos: true, stock: false, tareas: false });
+    const tools = registry.forProfile("romi");
+    expect(serializeTools(tools)).toHaveLength(tools.length);
   });
 
   it("rejects duplicate tool names", () => {

@@ -20,7 +20,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "tsx evals/run.ts",
-    "eval:live": "tsx evals/run-live.ts"
+    "eval:live": "tsx evals/run-live.ts",
+    "metrics": "tsx scripts/metrics.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",

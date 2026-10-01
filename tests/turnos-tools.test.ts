@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { ToolArgumentError, isWriteTool } from "../src/mcp/registry.js";
 import { createTurnosTools } from "../src/mcp/tools/turnos.js";
-import { InvalidDateError } from "../src/time/index.js";
 import { makeTestContext, TEST_ART_DATE, TEST_CHAT_ID } from "./helpers/context.js";
 
 const tools = createTurnosTools();
 const delDia = tools.find((tool) => tool.name === "turnos.del_dia")!;
+const rango = tools.find((tool) => tool.name === "turnos.rango")!;
 const disponibilidad = tools.find((tool) => tool.name === "turnos.disponibilidad")!;
 const servicios = tools.find((tool) => tool.name === "turnos.servicios")!;
+const pagosPendientes = tools.find((tool) => tool.name === "turnos.pagos_pendientes")!;
+const resumen = tools.find((tool) => tool.name === "turnos.resumen")!;
 const cancelar = tools.find(isWriteTool)!;
 
 describe("turnos read tools", () => {
@@ -50,14 +52,106 @@ describe("turnos read tools", () => {
 
   it("fails loudly on an unresolvable date", async () => {
     const { context } = makeTestContext();
-    await expect(
-      disponibilidad.execute({ fecha: "el jueves que viene" }, context),
-    ).rejects.toBeInstanceOf(InvalidDateError);
+    const error = await disponibilidad
+      .execute({ fecha: "en unos días" }, context)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ToolArgumentError);
+    expect((error as Error).message).toContain("Cannot resolve");
   });
 
-  it("fails with a typed error on invalid arguments", async () => {
+  it("defaults to today in ART server-side when no date is given", async () => {
+    const { context, backend } = makeTestContext();
+    const result = await disponibilidad.execute({}, context);
+
+    expect(backend.disponibilidadCalls).toEqual([TEST_ART_DATE]);
+    expect(JSON.parse(result.content)).toMatchObject({ fecha: TEST_ART_DATE });
+  });
+
+  it("still resolves an explicit disponibilidad date", async () => {
+    const { context, backend } = makeTestContext();
+    const result = await disponibilidad.execute({ fecha: "mañana" }, context);
+
+    expect(backend.disponibilidadCalls).toEqual(["2026-01-15"]);
+    expect(JSON.parse(result.content)).toMatchObject({ fecha: "2026-01-15" });
+  });
+
+  it("resolves a weekday phrase for a single day", async () => {
+    const { context, backend } = makeTestContext();
+    const result = await delDia.execute({ fecha: "el jueves" }, context);
+    expect(backend.delDiaCalls).toEqual(["2026-01-15"]);
+    expect(JSON.parse(result.content)).toMatchObject({ fecha: "2026-01-15" });
+  });
+});
+
+describe("turnos.rango", () => {
+  it("resolves an explicit range and lists the days in between", async () => {
+    const { context, backend } = makeTestContext();
+    const result = await rango.execute({ desde: TEST_ART_DATE, hasta: "2026-01-15" }, context);
+
+    expect(backend.rangoCalls).toEqual([[TEST_ART_DATE, "2026-01-15"]]);
+    expect(JSON.parse(result.content)).toMatchObject({
+      desde: TEST_ART_DATE,
+      hasta: "2026-01-15",
+    });
+    expect(result.data).toHaveLength(5);
+  });
+
+  it("expands 'esta semana' at 22:30 ART", async () => {
+    const { context, backend } = makeTestContext();
+    const result = await rango.execute({ desde: "esta semana" }, context);
+
+    expect(backend.rangoCalls).toEqual([["2026-01-12", "2026-01-18"]]);
+    expect(JSON.parse(result.content)).toMatchObject({
+      desde: "2026-01-12",
+      hasta: "2026-01-18",
+    });
+    expect(result.data).toHaveLength(6);
+  });
+
+  it("defaults an open range to a single day", async () => {
+    const { context, backend } = makeTestContext();
+    await rango.execute({}, context);
+    expect(backend.rangoCalls).toEqual([[TEST_ART_DATE, TEST_ART_DATE]]);
+  });
+
+  it("rejects a range longer than the cap", async () => {
+    const { context, backend } = makeTestContext();
+    await expect(
+      rango.execute({ desde: "2026-01-01", hasta: "2026-02-15" }, context),
+    ).rejects.toBeInstanceOf(ToolArgumentError);
+    expect(backend.rangoCalls).toEqual([]);
+  });
+});
+
+describe("turnos.pagos_pendientes and turnos.resumen", () => {
+  it("returns pending verifications plus the refund queue", async () => {
     const { context } = makeTestContext();
-    await expect(disponibilidad.execute({}, context)).rejects.toBeInstanceOf(ToolArgumentError);
+    const result = await pagosPendientes.execute({}, context);
+    const parsed = JSON.parse(result.content) as {
+      verificaciones: Array<{ status: string }>;
+      reintegros: { count: number };
+    };
+
+    expect(parsed.verificaciones.map((verification) => verification.status)).toEqual([
+      "pending",
+      "failed",
+    ]);
+    expect(parsed.reintegros.count).toBe(1);
+  });
+
+  it("summarises the ART day when no date is given", async () => {
+    const { context } = makeTestContext();
+    const result = await resumen.execute({}, context);
+
+    expect(result.data).toEqual({
+      date: TEST_ART_DATE,
+      totalAppointments: 3,
+      counts: { confirmed: 1, paid: 1, cancelled: 1 },
+      revenue: 24000,
+      pendingVerifications: 2,
+      refundsPending: 1,
+    });
   });
 });
 

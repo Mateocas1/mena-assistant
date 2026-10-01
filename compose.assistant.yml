@@ -1,0 +1,49 @@
+# Mena assistant service — snippet for the mena-nails production compose (PRD 25).
+#
+# Deployment on the VM:
+#   1. copy this repo next to the mena-nails compose (e.g. ./mena-assistant)
+#   2. merge this `assistant` service and the `internal` network into the
+#      compose file already running there (or run it as an additional -f file
+#      sharing the same network)
+#   3. create ./secrets/assistant.env (chmod 600, never committed) with:
+#        TELEGRAM_BOT_TOKEN=...
+#        TELEGRAM_ALLOWLIST=<romi chat id>:romi,<mateo chat id>:mateo
+#        LLM_API_KEY=...
+#        ASSISTANT_API_BASE_URL=https://<deployment>.convex.site
+#        ASSISTANT_TOKEN=...
+#   4. docker compose up -d assistant
+#
+# No ports are published: the bot only makes outbound long-polling calls to
+# Telegram and reaches the booking backend over the internal Docker network.
+
+services:
+  assistant:
+    build:
+      context: ./mena-assistant
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./secrets/assistant.env
+    environment:
+      TURNOS_BACKEND: http
+      # JSONL audit log on a volume so `pnpm metrics` can read it.
+      AUDIT_LOG_FILE: /data/audit.log
+      HEALTH_FILE: /tmp/mena-assistant-alive
+      HEALTH_INTERVAL_SECONDS: "30"
+    volumes:
+      - assistant-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "dist/index.js", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  assistant-data:
+
+networks:
+  internal:
+    external: true

@@ -92,6 +92,18 @@ function asArgsRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * Reads the optional `userMessage` an adapter error carries (e.g. the 503
+ * "not configured" copy). Duck-typed so the loop stays backend-agnostic.
+ */
+export function userMessageOf(error: unknown): string | undefined {
+  if (error !== null && typeof error === "object" && "userMessage" in error) {
+    const value = (error as { userMessage?: unknown }).userMessage;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/**
  * Bounded tool-calling loop: at most `maxToolCalls` tool executions per
  * conversation turn, one retry when the model sends invalid arguments, a
  * per-call timeout and a fallback model. It never executes a write: write tools
@@ -100,7 +112,7 @@ function asArgsRecord(value: unknown): Record<string, unknown> {
 export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopResult> {
   const { transport, tools, context, config, audit } = options;
   const chatIdHash = hashChatId(context.chatId);
-  const toolSpecs = serializeTools(tools);
+  const toolSpecs = serializeTools(tools, context.clock);
 
   const messages: LlmMessage[] = [
     { role: "system", content: options.systemPrompt },
@@ -304,6 +316,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
       } catch (error) {
         const latencyMs = Date.now() - started;
         const message = error instanceof Error ? error.message : String(error);
+        const userMessage = userMessageOf(error);
         records.push({
           tool: call.name,
           args: parsedArgs.value,
@@ -331,7 +344,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
           messages.push({
             role: "tool",
             toolCallId: call.id,
-            content: `Tool error: ${message}. Retry once with valid JSON for this tool schema.`,
+            content: `Tool error: ${message}. Retry once with corrected arguments for this tool.`,
           });
           continue;
         }
@@ -339,7 +352,9 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         messages.push({
           role: "tool",
           toolCallId: call.id,
-          content: `Tool error: ${message}. Tell the user you could not complete that action.`,
+          content: userMessage
+            ? `Tool error: ${message}. Tell the user, in Spanish, verbatim: "${userMessage}"`
+            : `Tool error: ${message}. Tell the user you could not complete that action.`,
         });
       }
     }

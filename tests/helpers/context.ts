@@ -12,11 +12,23 @@ export const TEST_CHAT_ID = "111";
 export class SpyTurnosBackend extends MockTurnosBackend {
   readonly cancelCalls: string[] = [];
   readonly delDiaCalls: string[] = [];
+  readonly rangoCalls: Array<[string, string]> = [];
+  readonly disponibilidadCalls: string[] = [];
   servicioCalls = 0;
 
   override async delDia(date: string) {
     this.delDiaCalls.push(date);
     return super.delDia(date);
+  }
+
+  override async rango(from: string, to: string) {
+    this.rangoCalls.push([from, to]);
+    return super.rango(from, to);
+  }
+
+  override async disponibilidad(date: string) {
+    this.disponibilidadCalls.push(date);
+    return super.disponibilidad(date);
   }
 
   override async servicios() {

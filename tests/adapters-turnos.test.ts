@@ -98,3 +98,65 @@ describe("MockTurnosBackend (mirrors the 30a contract shapes)", () => {
     await expect(backend.cancelar("apt_cancelled_today")).rejects.toThrow(/cannot cancel/i);
   });
 });
+
+describe("MockTurnosBackend M1 reads", () => {
+  it("returns a date range sorted by day and slot, without the deposit", async () => {
+    const backend = new MockTurnosBackend(fixtures);
+    const range = await backend.rango(REFERENCE, "2026-01-15");
+
+    expect(range.map((appointment) => `${appointment.date} ${appointment.timeSlot}`)).toEqual([
+      "2026-01-14 08:00",
+      "2026-01-14 14:00",
+      "2026-01-14 18:30",
+      "2026-01-15 11:00",
+      "2026-01-15 16:30",
+    ]);
+    expect(range[0]).toEqual({
+      id: "apt_today_0800",
+      date: REFERENCE,
+      timeSlot: "08:00",
+      status: "confirmed",
+      serviceName: "Servicio Soft Gel",
+      clientName: "Ana G.",
+    });
+    expect(Object.keys(range[0] ?? {})).not.toContain("depositPrice");
+  });
+
+  it("returns only non-terminal verifications plus the refund queue", async () => {
+    const backend = new MockTurnosBackend(fixtures);
+    const pending = await backend.pagosPendientes();
+
+    expect(pending.verificaciones.map((verification) => verification.status)).toEqual([
+      "pending",
+      "failed",
+    ]);
+    expect(pending.verificaciones[0]).toMatchObject({ id: "ver_today_pending", amount: 12500 });
+    expect(pending.reintegros).toEqual({
+      count: 1,
+      totalAmount: 5000,
+      byReason: { admin_cancellation: 1 },
+    });
+  });
+
+  it("summarises a day like the backend does", async () => {
+    const backend = new MockTurnosBackend(fixtures);
+    const summary = await backend.resumen(REFERENCE);
+
+    expect(summary).toEqual({
+      date: REFERENCE,
+      totalAppointments: 3,
+      counts: { confirmed: 1, paid: 1, cancelled: 1 },
+      revenue: 24000,
+      pendingVerifications: 2,
+      refundsPending: 1,
+    });
+  });
+
+  it("summarises an empty day", async () => {
+    const backend = new MockTurnosBackend(fixtures);
+    const summary = await backend.resumen("2026-06-01");
+    expect(summary.totalAppointments).toBe(0);
+    expect(summary.counts).toEqual({});
+    expect(summary.revenue).toBe(0);
+  });
+});

@@ -1,0 +1,13 @@
+.git
+.github
+.atl
+odd
+tests
+evals
+dist
+coverage
+node_modules
+*.log
+.env
+.env.*
+!.env.example

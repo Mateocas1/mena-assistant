@@ -3,7 +3,7 @@ import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { isToolAllowed } from "../bot/allowlist.js";
 import type { ProfileName } from "../config.js";
 import type { Proposal, ProposalStore } from "../proposals/store.js";
-import type { Clock } from "../time/index.js";
+import { systemClock, type Clock } from "../time/index.js";
 
 /** Everything a tool handler may touch, assembled once per conversation. */
 export interface ToolHandlerContext {
@@ -35,6 +35,11 @@ interface BaseToolDefinition {
   readonly title: string;
   readonly description: string;
   readonly schema: ToolSchema;
+  /**
+   * Fresh date anchors appended to the description the model reads, evaluated at
+   * serialisation time so a long-running process never hands out stale dates.
+   */
+  readonly hint?: (clock: Clock) => string;
   /** Parse args and run the tool. For writes this returns a proposal only. */
   execute(rawArgs: unknown, context: ToolHandlerContext): Promise<ToolResult>;
 }
@@ -61,6 +66,7 @@ export interface ToolConfig<S extends ToolSchema> {
   readonly title: string;
   readonly description: string;
   readonly schema: S;
+  readonly hint?: (clock: Clock) => string;
   readonly handler: (args: z.infer<S>, context: ToolHandlerContext) => Promise<ToolResult>;
 }
 
@@ -95,6 +101,7 @@ export function defineReadTool<S extends ToolSchema>(config: ToolConfig<S>): Rea
     title: config.title,
     description: config.description,
     schema: config.schema,
+    ...(config.hint ? { hint: config.hint } : {}),
     async execute(rawArgs, context) {
       return config.handler(parseArgs(config.name, config.schema, rawArgs), context);
     },
@@ -159,18 +166,26 @@ export class ToolRegistry {
     return this.tools.filter((tool) => isToolAllowed(profile, tool.name));
   }
 
-  toOpenAiTools(profile: ProfileName): JsonFunctionToolSpec[] {
-    return serializeTools(this.forProfile(profile));
+  toOpenAiTools(profile: ProfileName, clock: Clock = systemClock): JsonFunctionToolSpec[] {
+    return serializeTools(this.forProfile(profile), clock);
   }
 }
 
+/** Description the model reads: fixed copy plus the fresh date anchors. */
+export function describeTool(tool: ToolDefinition, clock: Clock): string {
+  return tool.hint ? `${tool.description}\n${tool.hint(clock)}` : tool.description;
+}
+
 /** Serialises tool definitions as OpenAI function specs (JSON Schema parameters). */
-export function serializeTools(tools: readonly ToolDefinition[]): JsonFunctionToolSpec[] {
+export function serializeTools(
+  tools: readonly ToolDefinition[],
+  clock: Clock = systemClock,
+): JsonFunctionToolSpec[] {
   return tools.map((tool) => ({
     type: "function" as const,
     function: {
       name: tool.name,
-      description: tool.description,
+      description: describeTool(tool, clock),
       parameters: z.toJSONSchema(tool.schema) as Record<string, unknown>,
     },
   }));

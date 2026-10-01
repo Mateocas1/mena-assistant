@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProfileName } from "../config.js";
-import type { ToolHandlerContext, ToolRegistry } from "./registry.js";
+import { describeTool, type ToolHandlerContext, type ToolRegistry } from "./registry.js";
 
 export interface McpServerOptions {
   readonly registry: ToolRegistry;
@@ -25,7 +25,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       tool.name,
       {
         title: tool.title,
-        description: tool.description,
+        description: describeTool(tool, options.context.clock),
         inputSchema: tool.schema,
       },
       async (args) => {

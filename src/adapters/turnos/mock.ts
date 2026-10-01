@@ -1,14 +1,40 @@
 import { artToday } from "../../time/index.js";
-import { ACTIVE_BOOKING_STATUSES, createTurnosFixtures, type TurnosFixtures } from "./fixtures.js";
+import {
+  ACTIVE_BOOKING_STATUSES,
+  NON_TERMINAL_VERIFICATION_STATUSES,
+  REVENUE_STATUSES,
+  createTurnosFixtures,
+  type FixtureAppointment,
+  type TurnosFixtures,
+} from "./fixtures.js";
 import {
   TurnosError,
   TurnosNotFoundError,
   type Appointment,
   type AvailabilitySlot,
   type CancelResult,
+  type DailySummary,
+  type PendingPayments,
   type Service,
   type TurnosBackend,
 } from "./client.js";
+
+function toAppointment(row: FixtureAppointment): Appointment {
+  return {
+    id: row.id,
+    date: row.date,
+    timeSlot: row.timeSlot,
+    status: row.status,
+    serviceName: row.serviceName,
+    clientName: row.clientName,
+  };
+}
+
+function byDateThenSlot(left: FixtureAppointment, right: FixtureAppointment): number {
+  return left.date === right.date
+    ? left.timeSlot.localeCompare(right.timeSlot)
+    : left.date.localeCompare(right.date);
+}
 
 /**
  * In-memory booking backend backed by {@link createTurnosFixtures}. It mirrors
@@ -18,7 +44,7 @@ import {
  */
 export class MockTurnosBackend implements TurnosBackend {
   private readonly fixtures: TurnosFixtures;
-  private appointments: Appointment[];
+  private appointments: FixtureAppointment[];
 
   constructor(fixtures: TurnosFixtures = createTurnosFixtures(artToday())) {
     this.fixtures = fixtures;
@@ -29,7 +55,14 @@ export class MockTurnosBackend implements TurnosBackend {
     return this.appointments
       .filter((appointment) => appointment.date === date)
       .sort((left, right) => left.timeSlot.localeCompare(right.timeSlot))
-      .map((appointment) => ({ ...appointment }));
+      .map(toAppointment);
+  }
+
+  async rango(from: string, to: string): Promise<Appointment[]> {
+    return this.appointments
+      .filter((appointment) => appointment.date >= from && appointment.date <= to)
+      .sort(byDateThenSlot)
+      .map(toAppointment);
   }
 
   async disponibilidad(date: string): Promise<AvailabilitySlot[]> {
@@ -55,6 +88,39 @@ export class MockTurnosBackend implements TurnosBackend {
     return [...this.fixtures.services]
       .sort((left, right) => left.slug.localeCompare(right.slug))
       .map((service) => ({ ...service }));
+  }
+
+  async pagosPendientes(): Promise<PendingPayments> {
+    const pending = this.fixtures.verifications.filter((verification) =>
+      (NON_TERMINAL_VERIFICATION_STATUSES as readonly string[]).includes(verification.status),
+    );
+
+    return {
+      verificaciones: pending.map((verification) => ({ ...verification })),
+      reintegros: { ...this.fixtures.refunds, byReason: { ...this.fixtures.refunds.byReason } },
+    };
+  }
+
+  async resumen(date: string): Promise<DailySummary> {
+    const rows = this.appointments.filter((appointment) => appointment.date === date);
+    const counts: Record<string, number> = {};
+    let revenue = 0;
+
+    for (const row of rows) {
+      counts[row.status] = (counts[row.status] ?? 0) + 1;
+      if ((REVENUE_STATUSES as readonly string[]).includes(row.status)) {
+        revenue += row.depositPrice;
+      }
+    }
+
+    return {
+      date,
+      totalAppointments: rows.length,
+      counts,
+      revenue,
+      pendingVerifications: (await this.pagosPendientes()).verificaciones.length,
+      refundsPending: this.fixtures.refunds.count,
+    };
   }
 
   async cancelar(appointmentId: string, _motivo?: string): Promise<CancelResult> {

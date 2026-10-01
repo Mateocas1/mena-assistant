@@ -1,5 +1,5 @@
 import { addDays } from "../../time/index.js";
-import type { Appointment, Service } from "./client.js";
+import type { Appointment, AssistantVerification, RefundSummary, Service } from "./client.js";
 
 /** Slots offered by the salon (test-kimi `TIME_SLOTS`). */
 export const TIME_SLOTS = ["08:00", "11:00", "14:00", "16:30", "18:30"] as const;
@@ -7,14 +7,32 @@ export const TIME_SLOTS = ["08:00", "11:00", "14:00", "16:30", "18:30"] as const
 /** Statuses that occupy a slot (test-kimi `ACTIVE_BOOKING_STATUSES`). */
 export const ACTIVE_BOOKING_STATUSES = ["pending", "paid", "confirmed"] as const;
 
+/** Statuses that count as revenue in the daily summary (test-kimi `getDailySummary`). */
+export const REVENUE_STATUSES = ["paid", "confirmed", "completed"] as const;
+
+/** Statuses that still need a human decision (test-kimi `NON_TERMINAL_VERIFICATION_STATUSES`). */
+export const NON_TERMINAL_VERIFICATION_STATUSES = [
+  "pending",
+  "auto_match",
+  "manual_review",
+  "failed",
+] as const;
+
+/** Fixture-only extension: the deposit is needed to mirror `getDailySummary.revenue`. */
+export interface FixtureAppointment extends Appointment {
+  readonly depositPrice: number;
+}
+
 export interface TurnosFixtures {
   readonly timeSlots: readonly string[];
-  readonly appointments: readonly Appointment[];
+  readonly appointments: readonly FixtureAppointment[];
   /** Blocked time slots per ART date. */
   readonly blockedSlots: Readonly<Record<string, readonly string[]>>;
   /** ART dates blocked entirely. */
   readonly fullDayBlocks: readonly string[];
   readonly services: readonly Service[];
+  readonly verifications: readonly AssistantVerification[];
+  readonly refunds: RefundSummary;
 }
 
 /** Canonical catalog (test-kimi `CANONICAL_SERVICE_CATALOG`). */
@@ -45,6 +63,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "confirmed",
         serviceName: "Servicio Soft Gel",
         clientName: "Ana G.",
+        depositPrice: 12500,
       },
       {
         id: "apt_today_1400",
@@ -53,6 +72,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "paid",
         serviceName: "Servicio Capping",
         clientName: "Laura P.",
+        depositPrice: 11500,
       },
       {
         id: "apt_cancelled_today",
@@ -61,6 +81,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "cancelled",
         serviceName: "Servicio Semipermanente",
         clientName: "Nadia S.",
+        depositPrice: 10500,
       },
       {
         id: "apt_tomorrow_1100",
@@ -69,6 +90,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "confirmed",
         serviceName: "Retiro Soft Gel",
         clientName: "Sofía M.",
+        depositPrice: 4000,
       },
       {
         id: "apt_tomorrow_1630",
@@ -77,6 +99,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "pending",
         serviceName: "Servicio Semipermanente",
         clientName: "Carla D.",
+        depositPrice: 10500,
       },
       {
         id: "apt_dayafter_1800",
@@ -85,6 +108,7 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
         status: "confirmed",
         serviceName: "Servicio Soft Gel",
         clientName: "Marta R.",
+        depositPrice: 12500,
       },
     ],
     blockedSlots: {
@@ -93,5 +117,35 @@ export function createTurnosFixtures(referenceDate: string): TurnosFixtures {
     },
     fullDayBlocks: [],
     services: SERVICES,
+    verifications: [
+      {
+        id: "ver_today_pending",
+        status: "pending",
+        reason: "amount_mismatch",
+        amount: 12500,
+        date: referenceDate,
+        timeSlot: "08:00",
+        clientName: "Ana G.",
+      },
+      {
+        id: "ver_today_failed",
+        status: "failed",
+        reason: "wrong_destination",
+        amount: 11500,
+        date: referenceDate,
+        timeSlot: "14:00",
+        clientName: "Laura P.",
+      },
+      {
+        id: "ver_tomorrow_matched",
+        status: "matched",
+        reason: "verified",
+        amount: 4000,
+        date: tomorrow,
+        timeSlot: "11:00",
+        clientName: "Sofía M.",
+      },
+    ],
+    refunds: { count: 1, totalAmount: 5000, byReason: { admin_cancellation: 1 } },
   };
 }

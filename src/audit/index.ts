@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import type { ProfileName } from "../config.js";
 import { systemClock, type Clock } from "../time/index.js";
 import { redactArgs } from "./pii.js";
@@ -52,6 +53,13 @@ export function hashChatId(chatId: number | string): string {
 
 export function stdoutSink(line: string): void {
   process.stdout.write(`${line}\n`);
+}
+
+/** Appends each audit line to `path` (JSONL), creating it if needed. */
+export function createFileSink(path: string): AuditSink {
+  return (line: string): void => {
+    appendFileSync(path, `${line}\n`, "utf8");
+  };
 }
 
 /** Structured JSON-lines audit log: one self-contained record per event. */

@@ -18,9 +18,11 @@ export interface AppConfig {
     readonly maxToolCalls: number;
   };
   readonly turnos: {
-    readonly adapter: "mock" | "http";
-    readonly baseUrl?: string;
-    readonly assistantToken?: string;
+    readonly backend: "mock" | "http";
+    /** Convex `.convex.site` origin; required when `backend` is `http`. */
+    readonly apiBaseUrl?: string;
+    readonly token?: string;
+    readonly timeoutMs: number;
   };
   readonly features: {
     readonly turnos: boolean;
@@ -28,6 +30,10 @@ export interface AppConfig {
     readonly tareas: boolean;
   };
   readonly proposalTtlMs: number;
+  /** When set, the audit log is appended there as JSONL instead of stdout. */
+  readonly auditLogFile?: string;
+  /** Heartbeat file and interval used by the offline container healthcheck. */
+  readonly health: { readonly file: string; readonly intervalMs: number };
   /** Profile the standalone MCP server (non-Telegram clients) acts as. */
   readonly mcp: { readonly profile: ProfileName };
 }
@@ -100,31 +106,35 @@ const envSchema = z
     LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     LLM_MAX_TOOL_CALLS: z.coerce.number().int().positive().max(20).default(6),
 
-    TURNOS_ADAPTER: z.enum(["mock", "http"]).default("mock"),
-    ASSISTANT_BASE_URL: z.string().url().optional(),
+    TURNOS_BACKEND: z.enum(["mock", "http"]).default("mock"),
+    ASSISTANT_API_BASE_URL: z.string().url().optional(),
     ASSISTANT_TOKEN: z.string().min(1).optional(),
+    TURNOS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
     FEATURE_TURNOS: boolFromEnv("true"),
     FEATURE_STOCK: boolFromEnv("false"),
     FEATURE_TAREAS: boolFromEnv("false"),
 
     PROPOSAL_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+    AUDIT_LOG_FILE: z.string().min(1).optional(),
+    HEALTH_FILE: z.string().min(1).default("/tmp/mena-assistant-alive"),
+    HEALTH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
     MCP_PROFILE: z.enum(PROFILE_NAMES).default("mateo"),
   })
   .superRefine((env, ctx) => {
-    if (env.TURNOS_ADAPTER === "http") {
-      if (!env.ASSISTANT_BASE_URL) {
+    if (env.TURNOS_BACKEND === "http") {
+      if (!env.ASSISTANT_API_BASE_URL) {
         ctx.addIssue({
           code: "custom",
-          path: ["ASSISTANT_BASE_URL"],
-          message: "ASSISTANT_BASE_URL is required when TURNOS_ADAPTER=http",
+          path: ["ASSISTANT_API_BASE_URL"],
+          message: "ASSISTANT_API_BASE_URL is required when TURNOS_BACKEND=http",
         });
       }
       if (!env.ASSISTANT_TOKEN) {
         ctx.addIssue({
           code: "custom",
           path: ["ASSISTANT_TOKEN"],
-          message: "ASSISTANT_TOKEN is required when TURNOS_ADAPTER=http",
+          message: "ASSISTANT_TOKEN is required when TURNOS_BACKEND=http",
         });
       }
     }
@@ -163,9 +173,10 @@ export function parseConfig(env: EnvRecord): AppConfig {
       maxToolCalls: value.LLM_MAX_TOOL_CALLS,
     },
     turnos: {
-      adapter: value.TURNOS_ADAPTER,
-      baseUrl: value.ASSISTANT_BASE_URL,
-      assistantToken: value.ASSISTANT_TOKEN,
+      backend: value.TURNOS_BACKEND,
+      apiBaseUrl: value.ASSISTANT_API_BASE_URL,
+      token: value.ASSISTANT_TOKEN,
+      timeoutMs: value.TURNOS_TIMEOUT_MS,
     },
     features: {
       turnos: value.FEATURE_TURNOS,
@@ -173,6 +184,8 @@ export function parseConfig(env: EnvRecord): AppConfig {
       tareas: value.FEATURE_TAREAS,
     },
     proposalTtlMs: value.PROPOSAL_TTL_MINUTES * 60_000,
+    auditLogFile: value.AUDIT_LOG_FILE,
+    health: { file: value.HEALTH_FILE, intervalMs: value.HEALTH_INTERVAL_SECONDS * 1000 },
     mcp: { profile: value.MCP_PROFILE },
   };
 }

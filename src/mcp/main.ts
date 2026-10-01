@@ -11,7 +11,7 @@ import { createToolRegistry } from "./tools/index.js";
 export async function startMcpServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const config = parseConfig(env);
   const registry = createToolRegistry(config.features);
-  const backend = createTurnosBackend(config);
+  const backend = createTurnosBackend(config, { clock: systemClock });
 
   const context = {
     backend,
