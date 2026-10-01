@@ -1,0 +1,229 @@
+import type { TurnosBackend } from "../adapters/turnos/client.js";
+import { AuditLogger, hashChatId } from "../audit/index.js";
+import type { AppConfig, ProfileName } from "../config.js";
+import { buildSystemPrompt, LlmError, runToolLoop, type LlmTransport } from "../llm/index.js";
+import { isWriteTool, type ToolHandlerContext, type ToolRegistry } from "../mcp/registry.js";
+import type { Proposal, ProposalStore } from "../proposals/store.js";
+import { systemClock, type Clock } from "../time/index.js";
+import { resolveProfile, isToolAllowed } from "./allowlist.js";
+
+export const MODEL_ERROR_REPLY = "No pude contactar al modelo. Intentá de nuevo en un momento.";
+export const GENERIC_ERROR_REPLY = "Algo salió mal de mi lado. Intentá de nuevo en un momento.";
+export const STALE_CALLBACK_REPLY = "Esa confirmación ya no es válida.";
+export const CANCELLED_REPLY = "Listo, no toqué nada.";
+
+export interface BotDeps {
+  readonly config: AppConfig;
+  readonly registry: ToolRegistry;
+  readonly backend: TurnosBackend;
+  readonly proposals: ProposalStore;
+  readonly transport: LlmTransport;
+  readonly audit: AuditLogger;
+  readonly clock?: Clock;
+}
+
+export interface IncomingMessage {
+  readonly chatId: number | string;
+  readonly text: string;
+}
+
+export type BotReply =
+  | { readonly kind: "ignored" }
+  | { readonly kind: "reply"; readonly text: string; readonly proposals: readonly Proposal[] };
+
+export type CallbackAction = "confirm" | "cancel";
+
+export interface IncomingCallback {
+  readonly chatId: number | string;
+  readonly action: CallbackAction;
+  readonly proposalId: string;
+}
+
+export interface BotCallbackResult {
+  readonly kind: "ignored" | "reply";
+  readonly text?: string;
+}
+
+function toolContext(deps: BotDeps, profile: ProfileName, chatId: string): ToolHandlerContext {
+  return {
+    backend: deps.backend,
+    proposals: deps.proposals,
+    clock: deps.clock ?? systemClock,
+    profile,
+    chatId,
+  };
+}
+
+/**
+ * Handles one Telegram message: allowlist first (unknown chats produce no reply,
+ * no LLM call and no tool call), then the bounded tool loop. Write tools only
+ * come back as proposals; nothing is executed here.
+ */
+export async function handleMessage(deps: BotDeps, message: IncomingMessage): Promise<BotReply> {
+  const chatId = String(message.chatId);
+  const profile = resolveProfile(deps.config.telegram.allowlist, chatId);
+
+  if (!profile) {
+    // Audit the drop without message content or the raw chat id.
+    deps.audit.log({
+      event: "chat_dropped",
+      chatIdHash: hashChatId(chatId),
+      detail: "not_allowlisted",
+    });
+    return { kind: "ignored" };
+  }
+
+  const context = toolContext(deps, profile, chatId);
+  const tools = deps.registry.forProfile(profile);
+  const clock = deps.clock ?? systemClock;
+
+  try {
+    const result = await runToolLoop({
+      transport: deps.transport,
+      tools,
+      context,
+      config: {
+        model: deps.config.llm.model,
+        fallbackModel: deps.config.llm.fallbackModel,
+        timeoutMs: deps.config.llm.timeoutMs,
+        maxToolCalls: deps.config.llm.maxToolCalls,
+      },
+      audit: deps.audit,
+      systemPrompt: buildSystemPrompt(clock),
+      userMessage: message.text,
+    });
+
+    deps.audit.log({
+      event: "llm_turn",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      status: "ok",
+      model: result.model,
+      tokens: result.usage,
+      detail: result.stoppedReason,
+    });
+
+    return { kind: "reply", text: result.reply, proposals: result.proposals };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    deps.audit.log({
+      event: "error",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      status: "error",
+      error: detail,
+    });
+    return {
+      kind: "reply",
+      text: error instanceof LlmError ? MODEL_ERROR_REPLY : GENERIC_ERROR_REPLY,
+      proposals: [],
+    };
+  }
+}
+
+/**
+ * Handles a Confirm/Cancel button. Only a callback from the originating chat,
+ * before expiry, on a still-pending proposal reaches the adapter — and only
+ * through the write tool's `executeProposal`.
+ */
+export async function handleCallback(
+  deps: BotDeps,
+  callback: IncomingCallback,
+): Promise<BotCallbackResult> {
+  const chatId = String(callback.chatId);
+  const profile = resolveProfile(deps.config.telegram.allowlist, chatId);
+
+  if (!profile) {
+    deps.audit.log({
+      event: "chat_dropped",
+      chatIdHash: hashChatId(chatId),
+      detail: "not_allowlisted",
+    });
+    return { kind: "ignored" };
+  }
+
+  const consumed = deps.proposals.consume(callback.proposalId, chatId);
+  if (!consumed.ok) {
+    deps.audit.log({
+      event: "proposal_cancelled",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: callback.proposalId,
+      status: "denied",
+      detail: consumed.reason,
+    });
+    return { kind: "reply", text: STALE_CALLBACK_REPLY };
+  }
+
+  const proposal = consumed.proposal;
+
+  if (callback.action === "cancel") {
+    deps.audit.log({
+      event: "proposal_cancelled",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: proposal.id,
+      tool: proposal.tool,
+      status: "ok",
+    });
+    return { kind: "reply", text: CANCELLED_REPLY };
+  }
+
+  // Defense in depth: even a proposal that exists in the store must belong to
+  // this profile and name a tool this profile may call.
+  if (proposal.profile !== profile || !isToolAllowed(profile, proposal.tool)) {
+    deps.audit.log({
+      event: "error",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: proposal.id,
+      tool: proposal.tool,
+      status: "error",
+      error: "proposal is not allowed for this profile",
+    });
+    return { kind: "reply", text: GENERIC_ERROR_REPLY };
+  }
+
+  const tool = deps.registry.get(proposal.tool);
+  if (!tool || !isWriteTool(tool)) {
+    deps.audit.log({
+      event: "error",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: proposal.id,
+      tool: proposal.tool,
+      status: "error",
+      error: "proposal does not map to a write tool",
+    });
+    return { kind: "reply", text: GENERIC_ERROR_REPLY };
+  }
+
+  try {
+    const result = await tool.executeProposal(proposal.args, toolContext(deps, profile, chatId));
+    const data = result.data as { refundRequired?: boolean } | undefined;
+    const extra = data?.refundRequired ? " Quedó un reintegro pendiente de revisar." : "";
+
+    deps.audit.log({
+      event: "proposal_confirmed",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: proposal.id,
+      tool: proposal.tool,
+      status: "ok",
+    });
+
+    return { kind: "reply", text: `✅ ${proposal.summary}.${extra}` };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    deps.audit.log({
+      event: "proposal_confirmed",
+      profile,
+      chatIdHash: hashChatId(chatId),
+      proposalId: proposal.id,
+      tool: proposal.tool,
+      status: "error",
+      error: detail,
+    });
+    return { kind: "reply", text: `${GENERIC_ERROR_REPLY} (${detail})` };
+  }
+}

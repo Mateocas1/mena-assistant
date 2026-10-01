@@ -1,0 +1,146 @@
+import type { EvalCase } from "./types.js";
+
+/**
+ * Evals v0: 20 Spanish questions. Dates are literal because the eval clock is
+ * frozen at 2026-01-14 (a Wednesday) in ART — see `run.ts`.
+ */
+export const EVAL_CASES: readonly EvalCase[] = [
+  {
+    id: "turnos-hoy",
+    question: "¿Qué turnos tengo hoy?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-14" },
+  },
+  {
+    id: "turnos-manana",
+    question: "¿Tenés los turnos de mañana?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-15" },
+  },
+  {
+    id: "turnos-jueves",
+    question: "¿Qué turnos hay el jueves?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-15" },
+  },
+  {
+    id: "turnos-lunes",
+    question: "Mostrame los turnos del lunes",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-19" },
+  },
+  {
+    id: "turnos-iso",
+    question: "Turnos del 2026-01-20",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-20" },
+  },
+  {
+    id: "turnos-ayer",
+    question: "¿Qué turnos hubo ayer?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: { fecha: "2026-01-13" },
+  },
+  {
+    id: "turnos-sin-fecha",
+    question: "¿Qué turnos tengo?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: {},
+  },
+  {
+    id: "turnos-como-viene",
+    question: "¿Cómo viene el día?",
+    profile: "romi",
+    expectedTool: "turnos.del_dia",
+    expectedArgs: {},
+  },
+  {
+    id: "disponibilidad-jueves",
+    question: "¿Qué horarios libres hay el jueves?",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: { fecha: "2026-01-15" },
+  },
+  {
+    id: "disponibilidad-viernes",
+    question: "¿Me quedan horarios el viernes?",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: { fecha: "2026-01-16" },
+  },
+  {
+    id: "disponibilidad-manana",
+    question: "Necesito la disponibilidad para mañana",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: { fecha: "2026-01-15" },
+  },
+  {
+    id: "disponibilidad-iso",
+    question: "¿Qué horarios tenés el 2026-01-19?",
+    profile: "romi",
+    expectedTool: "turnos.disponibilidad",
+    expectedArgs: { fecha: "2026-01-19" },
+  },
+  {
+    id: "servicios-que-tenes",
+    question: "¿Qué servicios tenés?",
+    profile: "romi",
+    expectedTool: "turnos.servicios",
+    expectedArgs: {},
+  },
+  {
+    id: "servicios-precio-softgel",
+    question: "¿Cuánto cuesta el servicio de soft gel?",
+    profile: "romi",
+    expectedTool: "turnos.servicios",
+    expectedArgs: {},
+  },
+  {
+    id: "servicios-precios",
+    question: "Pasame los precios",
+    profile: "romi",
+    expectedTool: "turnos.servicios",
+    expectedArgs: {},
+  },
+  {
+    id: "servicios-lista",
+    question: "Lista de servicios y precios",
+    profile: "romi",
+    expectedTool: "turnos.servicios",
+    expectedArgs: {},
+  },
+  {
+    id: "cancelar-hoy",
+    question: "Cancelá el turno apt_today_1400",
+    profile: "romi",
+    expectedTool: "turnos.cancelar",
+    expectedArgs: { appointmentId: "apt_today_1400" },
+  },
+  {
+    id: "cancelar-motivo",
+    question: "Necesito cancelar el turno apt_tomorrow_1100 porque se va de viaje",
+    profile: "romi",
+    expectedTool: "turnos.cancelar",
+    expectedArgs: { appointmentId: "apt_tomorrow_1100" },
+  },
+  {
+    id: "sin-tool-saludo",
+    question: "Hola, buenos días",
+    profile: "romi",
+    expectedTool: null,
+  },
+  {
+    id: "sin-tool-gracias",
+    question: "Gracias!",
+    profile: "romi",
+    expectedTool: null,
+  },
+];
