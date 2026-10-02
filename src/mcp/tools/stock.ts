@@ -176,7 +176,9 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
     defineReadTool({
       name: "stock.precios",
       title: "Precios de servicios",
-      description: "Lista el historial de precios efectivos de los servicios de mena-nails.",
+      description:
+        "Lista el historial de cambios de precio de los servicios de mena-nails (auditoría de subas). " +
+        "No es la lista de precios vigentes: para eso usá turnos.servicios.",
       schema: z.object({}),
       async handler(_args, context) {
         const prices = await requireStock(context).precios();

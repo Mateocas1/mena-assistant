@@ -1,0 +1,29 @@
+import { describe, expect, it } from "vitest";
+import { buildSystemPrompt } from "../src/llm/prompt.js";
+import { fixedClock } from "../src/time/index.js";
+
+const CLOCK = fixedClock("2026-01-14T15:00:00Z"); // Wednesday 12:00 ART
+
+describe("buildSystemPrompt", () => {
+  it("pins every resolved ART anchor the tools accept relative to the clock", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("Hoy es 2026-01-14");
+    expect(prompt).toContain("mañana es 2026-01-15");
+    expect(prompt).toContain("pasado mañana es 2026-01-16");
+    expect(prompt).toContain("ayer fue 2026-01-13");
+    expect(prompt).toContain("2026-01-12");
+    expect(prompt).toContain("2026-01-18");
+    expect(prompt).toContain("America/Argentina/Buenos_Aires");
+  });
+
+  it("tells the model to call the write tool directly and to admit a missing tool", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("herramienta de escritura");
+    expect(prompt).toMatch(/no llames a otra herramienta/);
+  });
+
+  it("keeps the stock chain rules behind the stock flag", () => {
+    expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
+    expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");
+  });
+});

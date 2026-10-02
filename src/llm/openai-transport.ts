@@ -11,6 +11,21 @@ import type {
 export interface OpenAiTransportOptions {
   readonly apiKey: string;
   readonly baseUrl: string;
+  /** Injected in tests; defaults to the global fetch. */
+  readonly fetch?: typeof fetch;
+}
+
+// OpenAI-compatible APIs only accept function names matching
+// ^[a-zA-Z0-9_-]{1,64}$. Internal tool names are dotted (`turnos.del_dia`), so
+// the dot travels as a double underscore and is restored on the way back.
+const WIRE_DOT = "__";
+
+export function toWireToolName(name: string): string {
+  return name.split(".").join(WIRE_DOT);
+}
+
+export function fromWireToolName(name: string): string {
+  return name.split(WIRE_DOT).join(".");
 }
 
 function toChatMessages(
@@ -39,7 +54,7 @@ function toChatMessages(
           tool_calls: toolCalls.map((call) => ({
             id: call.id,
             type: "function" as const,
-            function: { name: call.name, arguments: call.arguments },
+            function: { name: toWireToolName(call.name), arguments: call.arguments },
           })),
         };
       }
@@ -52,7 +67,11 @@ function toToolCalls(
 ): LlmToolCall[] {
   return (calls ?? [])
     .filter((call) => call.type === "function")
-    .map((call) => ({ id: call.id, name: call.function.name, arguments: call.function.arguments }));
+    .map((call) => ({
+      id: call.id,
+      name: fromWireToolName(call.function.name),
+      arguments: call.function.arguments,
+    }));
 }
 
 /**
@@ -68,6 +87,7 @@ export class OpenAiTransport implements LlmTransport {
       apiKey: options.apiKey,
       baseURL: options.baseUrl,
       maxRetries: 0,
+      ...(options.fetch ? { fetch: options.fetch } : {}),
     });
   }
 
@@ -77,7 +97,12 @@ export class OpenAiTransport implements LlmTransport {
         model: request.model,
         messages: toChatMessages(request.messages),
         ...(request.tools.length > 0
-          ? { tools: request.tools as unknown as OpenAI.Chat.Completions.ChatCompletionTool[] }
+          ? {
+              tools: request.tools.map((tool) => ({
+                ...tool,
+                function: { ...tool.function, name: toWireToolName(tool.function.name) },
+              })) as unknown as OpenAI.Chat.Completions.ChatCompletionTool[],
+            }
           : {}),
       },
       {

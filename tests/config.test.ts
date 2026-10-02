@@ -15,8 +15,8 @@ describe("parseConfig", () => {
     expect(config.telegram.allowlist).toEqual({ "111": "romi", "222": "mateo" });
 
     expect(config.llm.baseUrl).toBe("https://api.nan.builders/v1");
-    expect(config.llm.model).toBe("deepseek-v4-flash");
-    expect(config.llm.fallbackModel).toBe("glm5.3-flash");
+    expect(config.llm.model).toBe("qwen3.8-flash");
+    expect(config.llm.fallbackModel).toBe("deepseek-v4-flash");
     expect(config.llm.timeoutMs).toBe(30_000);
     expect(config.llm.maxToolCalls).toBe(6);
 

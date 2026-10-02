@@ -18,7 +18,14 @@ import {
 import { fixedClock, type Clock } from "../src/time/index.js";
 import { EVAL_CASES } from "./dataset.js";
 import { runEvals } from "./runner.js";
-import type { EvalCase, EvalCaseResult } from "./types.js";
+import {
+  CONCURRENCY_LIMIT_DRAIN_MS,
+  isConcurrencyLimitError,
+  RequestLimiter,
+  parseRpmFlag,
+  retryAfterMs,
+} from "./rate-limit.js";
+import type { EvalCase, EvalCaseResult, EvalFailure, EvalToolCall } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RESULTS_DIR = join(HERE, "results");
@@ -58,8 +65,10 @@ export interface ModelRunResult {
   readonly passed: number;
   readonly toolAccuracy: number;
   readonly argsAccuracy: number;
-  readonly hallucinatedToolRate: number;
+  readonly fabricatedToolRate: number;
   readonly writeProposalRate: number;
+  /** Cases the provider rate-limited; excluded from every rate above. */
+  readonly skipped: number;
   readonly latencyMs: { readonly p50: number; readonly p95: number };
   readonly tokens: { readonly prompt: number; readonly completion: number; readonly total: number };
   readonly costUsd: number | null;
@@ -67,9 +76,13 @@ export interface ModelRunResult {
     readonly id: string;
     readonly ok: boolean;
     readonly expectedTool: string | null;
+    readonly expectedArgs: Readonly<Record<string, unknown>>;
     readonly actualTool: string | null;
+    readonly actualArgs?: unknown;
     readonly actualStatus?: string;
-    readonly hallucinated: boolean;
+    readonly fabricated: boolean;
+    readonly failure?: EvalFailure;
+    readonly calls: readonly EvalToolCall[];
     readonly latencyMs: number;
   }[];
   /** Populated when the model run itself failed (network, auth). */
@@ -114,6 +127,22 @@ export function parseModelsFlag(
   return models.length > 0 ? [...new Set(models)] : [...fallback];
 }
 
+/** `--concurrency N` (repeatable); defaults to 2 to stay gentle with the provider. */
+export function parseConcurrencyFlag(argv: readonly string[], fallback = 2): number {
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    const argument = argv[index];
+    const value = argument?.startsWith("--concurrency=")
+      ? argument.slice("--concurrency=".length)
+      : argument === "--concurrency" || argument === "-c"
+        ? argv[index + 1]
+        : undefined;
+    if (value === undefined) continue;
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 16) return parsed;
+  }
+  return fallback;
+}
+
 export function estimateCostUsd(
   tokens: { readonly prompt: number; readonly completion: number },
   price: PriceEntry | undefined,
@@ -145,12 +174,14 @@ export function withRetries(
     readonly retries?: number;
     readonly baseDelayMs?: number;
     readonly sleep?: (ms: number) => Promise<void>;
+    readonly now?: () => number;
   } = {},
 ): LlmTransport & { readonly retriesUsed: () => number } {
-  const retries = options.retries ?? 2;
+  const retries = options.retries ?? 5;
   const baseDelayMs = options.baseDelayMs ?? 500;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const now = options.now ?? (() => Date.now());
   let retriesUsed = 0;
 
   return {
@@ -165,7 +196,13 @@ export function withRetries(
         } catch (error) {
           if (attempt >= retries || retryableStatus(error) === undefined) throw error;
           retriesUsed += 1;
-          await sleep(Math.min(baseDelayMs * 2 ** attempt, 8_000));
+          // A 429 tells us when the window resets; wait at least that long. A
+          // "concurrency limit" 429 says nothing about when, so wait long enough
+          // for the provider to drain the requests it still counts as in flight.
+          const requested = retryAfterMs(error, now());
+          const drain = isConcurrencyLimitError(error) ? CONCURRENCY_LIMIT_DRAIN_MS : 0;
+          const backoff = Math.min(baseDelayMs * 2 ** attempt, 8_000);
+          await sleep(Math.max(backoff, requested ?? 0, drain));
         }
       }
     },
@@ -181,6 +218,16 @@ export interface RunComparisonOptions {
   readonly ranAt?: string;
   readonly priceTable?: PriceTable;
   readonly onModel?: (result: ModelRunResult) => void;
+}
+
+/** Wraps a transport so every request first takes a slot from the shared limiter. */
+export function withRequestLimit(transport: LlmTransport, limiter: RequestLimiter): LlmTransport {
+  return {
+    async complete(request, options) {
+      await limiter.acquire();
+      return transport.complete(request, options);
+    },
+  };
 }
 
 /** Runs the dataset once per model and returns one result per model. */
@@ -211,12 +258,22 @@ export async function runComparison(options: RunComparisonOptions): Promise<Mode
         passed: report.passed,
         toolAccuracy: report.toolAccuracy,
         argsAccuracy: report.argsAccuracy,
-        hallucinatedToolRate: report.hallucinatedToolRate,
+        fabricatedToolRate: report.fabricatedToolRate,
         writeProposalRate: report.writeProposalRate,
+        skipped: report.skipped,
         latencyMs: report.latencyMs,
         tokens: report.tokens,
         costUsd: estimateCostUsd(report.tokens, priceTable.models[model]),
         cases: report.results.map(slimCase),
+        // A run with no scored case is a model failure, not a 0% score: a run
+        // where every case hit the rate limit is a configuration problem.
+        ...(report.results.length > 0 &&
+        report.results.every((entry) => entry.failure?.kind === "case_error")
+          ? { error: report.results[0]?.failure?.detail ?? "every case failed" }
+          : {}),
+        ...(report.total > 0 && report.skipped === report.total
+          ? { error: "rate limited: every case was skipped, lower EVAL_RPM and retry" }
+          : {}),
       };
       results.push(result);
       options.onModel?.(result);
@@ -228,8 +285,9 @@ export async function runComparison(options: RunComparisonOptions): Promise<Mode
         passed: 0,
         toolAccuracy: 0,
         argsAccuracy: 0,
-        hallucinatedToolRate: 0,
+        fabricatedToolRate: 0,
         writeProposalRate: 0,
+        skipped: 0,
         latencyMs: { p50: 0, p95: 0 },
         tokens: { prompt: 0, completion: 0, total: 0 },
         costUsd: null,
@@ -249,9 +307,13 @@ function slimCase(result: EvalCaseResult): ModelRunResult["cases"][number] {
     id: result.id,
     ok: result.ok,
     expectedTool: result.expectedTool,
+    expectedArgs: result.expectedArgs,
     actualTool: result.actualTool,
+    ...(result.actualArgs === undefined ? {} : { actualArgs: result.actualArgs }),
     ...(result.actualStatus === undefined ? {} : { actualStatus: result.actualStatus }),
-    hallucinated: result.hallucinated,
+    fabricated: result.fabricated,
+    ...(result.failure === undefined ? {} : { failure: result.failure }),
+    calls: result.calls,
     latencyMs: result.latencyMs,
   };
 }
@@ -260,29 +322,61 @@ const percent = (value: number): string => `${(value * 100).toFixed(1)}%`;
 const ms = (value: number): string => `${Math.round(value)} ms`;
 const cost = (value: number | null): string => (value === null ? "n/d" : `$${value.toFixed(4)}`);
 
+/**
+ * Pads every cell to the widest cell of its column and emits one markdown table.
+ *
+ * `pnpm format:check` runs Prettier over the README, and Prettier reflows tables
+ * to exactly this shape: cells padded to the column width, the `---` separator
+ * filled with dashes, and a minimum width of 3. Emitting the padded form keeps a
+ * rendered table stable instead of leaving the README one `pnpm format` away from
+ * clean.
+ */
+function markdownTable(header: readonly string[], rows: readonly (readonly string[])[]): string[] {
+  const columns = header.length;
+  const widths = header.map((cell, column) =>
+    Math.max(3, cell.length, ...rows.map((row) => (row[column] ?? "").length)),
+  );
+  const line = (row: readonly string[]): string =>
+    `| ${Array.from({ length: columns }, (_, column) =>
+      (row[column] ?? "").padEnd(widths[column] as number),
+    ).join(" | ")} |`;
+  const separator = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
+  return [line(header), separator, ...rows.map(line)];
+}
+
 /** Markdown table, best tool accuracy first. */
 export function renderComparisonTable(
   results: readonly ModelRunResult[],
   priceTable: PriceTable,
 ): string {
   const header = [
-    "| Modelo | Tool | Args | Alucinaciones | Propuestas | p50 | p95 | Tokens (in/out) | Costo |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "Modelo",
+    "Tool",
+    "Args",
+    "Fabricados",
+    "Propuestas",
+    "p50",
+    "p95",
+    "Tokens (in/out)",
+    "Costo",
   ];
-
   const rows = [...results]
     .sort((left, right) => right.toolAccuracy - left.toolAccuracy)
     .map((result) => {
       if (result.error) {
-        return `| \`${result.model}\` | — | — | — | — | — | — | — | error: ${result.error} |`;
+        return [`\`${result.model}\``, "—", "—", "—", "—", "—", "—", "—", `error: ${result.error}`];
       }
-      return `| \`${result.model}\` | ${percent(result.toolAccuracy)} | ${percent(
-        result.argsAccuracy,
-      )} | ${percent(result.hallucinatedToolRate)} | ${percent(result.writeProposalRate)} | ${ms(
-        result.latencyMs.p50,
-      )} | ${ms(result.latencyMs.p95)} | ${result.tokens.prompt}/${result.tokens.completion} | ${cost(
-        result.costUsd,
-      )} |`;
+      return [
+        `\`${result.model}\``,
+        percent(result.toolAccuracy),
+        percent(result.argsAccuracy),
+        percent(result.fabricatedToolRate),
+        percent(result.writeProposalRate),
+        ms(result.latencyMs.p50),
+        ms(result.latencyMs.p95),
+        `${result.tokens.prompt}/${result.tokens.completion}`,
+        cost(result.costUsd),
+      ];
     });
 
   const missingPrices = results
@@ -293,20 +387,28 @@ export function renderComparisonTable(
   if (missingPrices.length > 0) {
     notes.push(`> Sin precios configurados para: ${missingPrices.join(", ")}.`);
   }
+  const rateLimited = results
+    .filter((result) => result.skipped > 0)
+    .map((result) => `${result.model} (${result.skipped})`);
+  if (rateLimited.length > 0) {
+    notes.push(
+      `> Casos salteados por rate limit, excluidos de la precisión: ${rateLimited.join(", ")}.`,
+    );
+  }
 
-  return [header.join("\n"), ...rows, ...notes].join("\n");
+  return [...markdownTable(header, rows), ...(notes.length > 0 ? ["", ...notes] : [])].join("\n");
 }
 
 export function renderResultsTable(results: readonly ModelRunResult[]): string {
   const header = [
-    "| Modelo | Casos | Pasan | Tool | Args | Alucinaciones | Propuestas | p50 | p95 |",
+    "| Modelo | Casos | Pasan | Tool | Args | Fabricados | Propuestas | p50 | p95 |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   const rows = results.map(
     (result) =>
       `| \`${result.model}\` | ${result.total} | ${result.passed} | ${percent(
         result.toolAccuracy,
-      )} | ${percent(result.argsAccuracy)} | ${percent(result.hallucinatedToolRate)} | ${percent(
+      )} | ${percent(result.argsAccuracy)} | ${percent(result.fabricatedToolRate)} | ${percent(
         result.writeProposalRate,
       )} | ${ms(result.latencyMs.p50)} | ${ms(result.latencyMs.p95)} |`,
   );
@@ -371,6 +473,29 @@ export async function main(
 ): Promise<number> {
   const log = options.stdout ?? ((line: string) => console.log(line));
   const models = parseModelsFlag(argv);
+  const concurrency = options.concurrency ?? parseConcurrencyFlag(argv);
+  const rpm = parseRpmFlag(argv);
+  const priceTable = loadPriceTable();
+  const readmePath = options.readmePath ?? README_PATH;
+
+  // `--render` rebuilds the README table from the stored results without any
+  // API call, so a comparison can run model by model and still publish together.
+  if (argv.includes("--render") || argv.includes("--table-only")) {
+    const stored = loadModelResults(options.resultsDir);
+    if (stored.length === 0) {
+      log("No hay resultados en evals/results para renderizar.");
+      return 1;
+    }
+    const storedTable = renderComparisonTable(stored, priceTable);
+    log(storedTable);
+    if (!updateReadmeTable(storedTable, readmePath)) {
+      log(
+        `No encontré los marcadores ${MODEL_COMPARISON_MARKERS.start} / ${MODEL_COMPARISON_MARKERS.end} en ${readmePath}; la tabla no se actualizó.`,
+      );
+      return 1;
+    }
+    return 0;
+  }
 
   const apiKey = options.apiKey ?? process.env.LLM_API_KEY;
   if (!apiKey) {
@@ -378,9 +503,11 @@ export async function main(
     return 2;
   }
   const baseUrl = options.baseUrl ?? process.env.LLM_BASE_URL ?? "https://api.nan.builders/v1";
-  const priceTable = loadPriceTable();
+  const limiter = new RequestLimiter({ rpm });
 
-  log(`Comparando ${models.length} modelos contra ${baseUrl} con el dataset de evaluación…`);
+  log(
+    `Comparando ${models.length} modelos contra ${baseUrl} · ${rpm} req/min (EVAL_RPM) · concurrencia ${concurrency}…`,
+  );
   const results = await runComparison({
     models,
     transportFactory: (model) => {
@@ -388,20 +515,26 @@ export async function main(
       const forced: LlmTransport = {
         complete: (request, callOptions) => inner.complete({ ...request, model }, callOptions),
       };
-      return withRetries(forced, { retries: 2, baseDelayMs: 500 });
+      // The limiter is shared across models; each retry takes a fresh slot.
+      return withRetries(withRequestLimit(forced, limiter), { retries: 5, baseDelayMs: 1_000 });
     },
     clock: options.clock ?? fixedClock(EVAL_CLOCK_INSTANT),
+    concurrency,
     ...(options.cases === undefined ? {} : { cases: options.cases }),
-    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     onModel: (result) => {
       if (options.resultsDir) writeModelResult(result, options.resultsDir);
       log(
         `${result.model}: tool ${(result.toolAccuracy * 100).toFixed(1)}% · args ${(
           result.argsAccuracy * 100
-        ).toFixed(1)}%${result.error ? ` · error: ${result.error}` : ""}`,
+        ).toFixed(1)}%${result.skipped > 0 ? ` · skipped ${result.skipped}` : ""}${
+          result.error ? ` · error: ${result.error}` : ""
+        }`,
       );
     },
   });
+  if (limiter.waitedMs() > 0) {
+    log(`Espera del limitador: ${Math.round(limiter.waitedMs() / 1000)} s.`);
+  }
 
   if (!options.resultsDir) {
     for (const result of results) writeModelResult(result);
@@ -410,7 +543,6 @@ export async function main(
   const table = renderComparisonTable(results, priceTable);
   log(table);
 
-  const readmePath = options.readmePath ?? README_PATH;
   if (!updateReadmeTable(table, readmePath)) {
     log(
       `No encontré los marcadores ${MODEL_COMPARISON_MARKERS.start} / ${MODEL_COMPARISON_MARKERS.end} en ${readmePath}; la tabla no se actualizó.`,

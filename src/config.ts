@@ -132,8 +132,8 @@ const envSchema = z
 
     LLM_BASE_URL: z.string().url().default("https://api.nan.builders/v1"),
     LLM_API_KEY: z.string().min(1, "LLM_API_KEY is required"),
-    LLM_MODEL: z.string().min(1).default("deepseek-v4-flash"),
-    LLM_FALLBACK_MODEL: z.string().min(1).default("glm5.3-flash"),
+    LLM_MODEL: z.string().min(1).default("qwen3.8-flash"),
+    LLM_FALLBACK_MODEL: z.string().min(1).default("deepseek-v4-flash"),
     LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     LLM_MAX_TOOL_CALLS: z.coerce.number().int().positive().max(20).default(6),
 

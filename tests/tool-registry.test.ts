@@ -76,6 +76,28 @@ describe("ToolRegistry", () => {
     expect(descriptionOf("turnos.servicios")).not.toContain("Anclas de fecha");
   });
 
+  it("disambiguates current prices from the price history", () => {
+    const registry = createToolRegistry({ turnos: true, stock: true, tareas: false });
+    const specs = registry.toOpenAiTools("romi");
+    const descriptionOf = (name: string) =>
+      specs.find((spec) => spec.function.name === name)?.function.description ?? "";
+
+    expect(descriptionOf("turnos.servicios")).toContain("precio actual");
+    expect(descriptionOf("turnos.servicios")).toContain("stock.precios");
+    expect(descriptionOf("stock.precios")).toContain("historial");
+    expect(descriptionOf("stock.precios")).toContain("turnos.servicios");
+  });
+
+  it("points a single day away from the range and the billing summary", () => {
+    const registry = createToolRegistry({ turnos: true, stock: true, tareas: false });
+    const specs = registry.toOpenAiTools("romi");
+    const descriptionOf = (name: string) =>
+      specs.find((spec) => spec.function.name === name)?.function.description ?? "";
+
+    expect(descriptionOf("turnos.rango")).toContain("turnos.del_dia");
+    expect(descriptionOf("turnos.resumen")).toContain("turnos.del_dia");
+  });
+
   it("serialises the same tools with the default clock when none is given", () => {
     const registry = createToolRegistry({ turnos: true, stock: false, tareas: false });
     const tools = registry.forProfile("romi");

@@ -492,8 +492,8 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: {},
   },
   {
-    id: "stock-precios-servicios",
-    question: "Precios de los servicios de mena-nails",
+    id: "stock-subas-servicios",
+    question: "¿Hubo subas de precios en los servicios?",
     profile: "romi",
     expectedTool: "stock.precios",
     expectedArgs: {},

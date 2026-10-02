@@ -174,6 +174,14 @@ describe("LLM tool loop", () => {
     await expect(run()).rejects.toBeInstanceOf(LlmError);
   });
 
+  it("carries the provider cause in the typed error", async () => {
+    const { run } = setup([
+      Object.assign(new Error("429 rate limited"), { status: 429 }),
+      Object.assign(new Error("503 service unavailable"), { status: 503 }),
+    ]);
+    await expect(run()).rejects.toThrow(/429 rate limited/);
+  });
+
   it("caps to one write proposal per turn", async () => {
     const { run, test, lines } = setup([
       toolCallsCompletion([

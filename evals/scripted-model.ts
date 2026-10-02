@@ -46,7 +46,8 @@ export function extractDate(question: string, clock: Clock): string | undefined 
 const STOCK_PATTERN = /(stock|insumo|inventario)/;
 const STOCK_ALERT_PATTERN = /(alerta|umbral|por acabar|por debajo|baj)/;
 const STOCK_LOG_PATTERN = /(servicios? registrados?|servicios? recientes?|ultimos servicios?)/;
-const STOCK_PRICE_PATTERN = /(historial de precios|precios de mena|precios de los servicios)/;
+const STOCK_PRICE_PATTERN =
+  /(historial de precios|precios de mena|precios de los servicios|subas? de precios)/;
 const STOCK_CATALOG_PATTERN = /(catalogo|colores)/;
 const REGISTRAR_PATTERN = /(registrar?|descont\w*|procesar?)\s+(el\s+)?servicio/;
 

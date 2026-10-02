@@ -104,6 +104,10 @@ export function userMessageOf(error: unknown): string | undefined {
   return undefined;
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Bounded tool-calling loop: at most `maxToolCalls` tool executions per
  * conversation turn, one retry when the model sends invalid arguments, a
@@ -152,7 +156,9 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
       );
     } catch (primaryError) {
       if (!config.fallbackModel || config.fallbackModel === config.model) {
-        throw new LlmError(`Model ${config.model} failed`, { cause: primaryError });
+        throw new LlmError(`Model ${config.model} failed: ${describeError(primaryError)}`, {
+          cause: primaryError,
+        });
       }
       try {
         const completion = await withSpan(
@@ -173,7 +179,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         return completion;
       } catch (fallbackError) {
         throw new LlmError(
-          `Model ${config.model} and fallback ${config.fallbackModel} both failed`,
+          `Model ${config.model} and fallback ${config.fallbackModel} both failed: ${describeError(primaryError)} / ${describeError(fallbackError)}`,
           { cause: fallbackError },
         );
       }

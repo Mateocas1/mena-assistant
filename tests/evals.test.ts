@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { compareArgs } from "../evals/args.js";
 import { EVAL_CASES } from "../evals/dataset.js";
-import { filterCasesByTag, matchesArgs, runEvals } from "../evals/runner.js";
+import { filterCasesByTag, runEvals } from "../evals/runner.js";
 import { createScriptedTransport } from "../evals/scripted-model.js";
 import { fixedClock } from "../src/time/index.js";
 
@@ -86,10 +87,10 @@ describe("evals v0", () => {
     expect(forced?.actualStatus).toBe("proposal");
     expect(forced?.wroteProposal).toBe(true);
 
-    // Romi asking for tareas: no tool at all, and no hallucination.
+    // Romi asking for tareas: no tool at all, and no fabrication.
     const tareas = report.results.find((result) => result.id === "romi-asks-tareas");
     expect(tareas?.actualTool).toBeNull();
-    expect(tareas?.hallucinated).toBe(false);
+    expect(tareas?.fabricated).toBe(false);
   });
 
   it("never executes a write while evaluating", async () => {
@@ -106,10 +107,16 @@ describe("evals v0", () => {
     expect(report.results.every((result) => result.ok)).toBe(true);
   });
 
-  it("compares only the expected argument keys", () => {
-    expect(matchesArgs({ fecha: "2026-01-14", extra: 1 }, { fecha: "2026-01-14" })).toBe(true);
-    expect(matchesArgs({ fecha: "2026-01-15" }, { fecha: "2026-01-14" })).toBe(false);
-    expect(matchesArgs(undefined, {})).toBe(true);
-    expect(matchesArgs(undefined, { fecha: "2026-01-14" })).toBe(false);
+  it("compares the expected argument subset semantically", () => {
+    const clock = fixedClock("2026-01-14T15:00:00Z");
+    expect(compareArgs("turnos.del_dia", { fecha: "2026-01-14" }, {}, clock).matched).toBe(true);
+    expect(
+      compareArgs("turnos.del_dia", { fecha: "2026-01-14" }, { fecha: "2026-01-15" }, clock)
+        .matched,
+    ).toBe(false);
+    expect(compareArgs("turnos.servicios", {}, undefined, clock).matched).toBe(true);
+    expect(compareArgs("turnos.cancelar", { appointmentId: "a" }, undefined, clock).matched).toBe(
+      false,
+    );
   });
 });

@@ -16,7 +16,7 @@ export function createTurnosReadTools(): ToolDefinition[] {
       title: "Turnos del día",
       description:
         "Lista los turnos de un día. Sin fecha usa hoy (America/Argentina/Buenos_Aires). " +
-        "Devuelve cada turno con id, fecha, horario, estado, servicio y nombre corto de la clienta.",
+        "Es la agenda del día: qué turnos hay. Para números o facturación usá turnos.resumen.",
       schema: z.object({
         fecha: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, hoy.`),
       }),
@@ -33,7 +33,8 @@ export function createTurnosReadTools(): ToolDefinition[] {
       title: "Turnos de un rango",
       description:
         `Lista los turnos entre dos fechas, ambas incluidas (máximo ${MAX_RANGE_DAYS} días). ` +
-        "Usala para 'esta semana' o 'la semana que viene', pasando esas palabras en `desde` sin `hasta`.",
+        "Usala para 'esta semana' o 'la semana que viene', pasando esas palabras en `desde` sin `hasta`. " +
+        "Para un solo día usá turnos.del_dia.",
       schema: z.object({
         desde: z.string().optional().describe(`${FECHA_DESCRIPTION} o 'esta semana'.`),
         hasta: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, igual a 'desde'.`),
@@ -85,7 +86,9 @@ export function createTurnosReadTools(): ToolDefinition[] {
     defineReadTool({
       name: "turnos.servicios",
       title: "Servicios y precios",
-      description: "Lista los servicios activos del salón con precio y duración en minutos.",
+      description:
+        "Lista los servicios activos del salón con su precio actual y duración en minutos. " +
+        "Es la fuente de los precios vigentes; para el historial de cambios de precio usá stock.precios.",
       schema: z.object({}),
       async handler(_args, context) {
         const servicios = await context.backend.servicios();
@@ -116,6 +119,7 @@ export function createTurnosReadTools(): ToolDefinition[] {
       title: "Resumen del día",
       description:
         "Resumen de un día: cantidad de turnos por estado, seña facturada, pagos por revisar y reintegros pendientes. " +
+        "Son números agregados y facturación, no la lista de turnos: para ver los turnos del día usá turnos.del_dia. " +
         "Sin fecha usa hoy.",
       schema: z.object({
         fecha: z.string().optional().describe(`${FECHA_DESCRIPTION} Por defecto, hoy.`),

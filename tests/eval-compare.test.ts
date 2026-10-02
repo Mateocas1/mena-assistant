@@ -9,13 +9,16 @@ import {
   loadModelResults,
   main,
   parseModelsFlag,
+  parseConcurrencyFlag,
   renderComparisonTable,
   runComparison,
   updateReadmeTable,
+  withRequestLimit,
   withRetries,
   writeModelResult,
   type ModelRunResult,
 } from "../evals/compare.js";
+import { CONCURRENCY_LIMIT_DRAIN_MS, RequestLimiter } from "../evals/rate-limit.js";
 import { EVAL_CASES } from "../evals/dataset.js";
 import { createScriptedTransport } from "../evals/scripted-model.js";
 import type {
@@ -38,6 +41,17 @@ describe("parseModelsFlag", () => {
     expect(parseModelsFlag(["-m", "a"])).toEqual(["a"]);
     expect(parseModelsFlag(["--models", "a", "--models", "b"])).toEqual(["a", "b"]);
     expect(parseModelsFlag([])).toEqual([...DEFAULT_MODELS]);
+  });
+});
+
+describe("parseConcurrencyFlag", () => {
+  it("reads --concurrency in both shapes and clamps to a sane range", () => {
+    expect(parseConcurrencyFlag(["--concurrency", "6"])).toBe(6);
+    expect(parseConcurrencyFlag(["--concurrency=2"])).toBe(2);
+    expect(parseConcurrencyFlag(["-c", "3"])).toBe(3);
+    expect(parseConcurrencyFlag([], 2)).toBe(2);
+    expect(parseConcurrencyFlag(["--concurrency", "0"], 2)).toBe(2);
+    expect(parseConcurrencyFlag(["--concurrency", "99"], 2)).toBe(2);
   });
 });
 
@@ -91,6 +105,31 @@ describe("withRetries", () => {
     expect(transport.retriesUsed()).toBe(2);
   });
 
+  it("waits for a concurrency-limit 429 to drain instead of backing off fast", async () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const inner: LlmTransport = {
+      complete: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(
+            new Error("429 gemma4 concurrency limit: max 5 simultaneous requests."),
+            { status: 429 },
+          );
+        }
+        return completion;
+      },
+    };
+
+    const transport = withRetries(inner, {
+      retries: 1,
+      baseDelayMs: 10,
+      sleep: async (ms) => void sleeps.push(ms),
+    });
+    await expect(transport.complete(request, options)).resolves.toEqual(completion);
+    expect(sleeps).toEqual([CONCURRENCY_LIMIT_DRAIN_MS]);
+  });
+
   it("does not retry a 400 and gives up after the budget", async () => {
     let calls = 0;
     const badRequest: LlmTransport = {
@@ -128,6 +167,56 @@ describe("withRetries", () => {
     await expect(transport.complete(request, options)).resolves.toEqual(completion);
     expect(calls).toBe(2);
   });
+
+  it("waits at least the 429 retry-after before retrying", async () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const limited: LlmTransport = {
+      complete: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error("429"), {
+            status: 429,
+            headers: { "retry-after": "3" },
+          });
+        }
+        return completion;
+      },
+    };
+    const transport = withRetries(limited, {
+      retries: 1,
+      baseDelayMs: 1,
+      sleep: async (ms) => void sleeps.push(ms),
+    });
+    await expect(transport.complete(request, options)).resolves.toEqual(completion);
+    expect(sleeps).toEqual([3_000]);
+  });
+
+  it("takes a limiter slot before every request", async () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const limiter = new RequestLimiter({
+      rpm: 1,
+      now: () => time,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        time += ms;
+      },
+    });
+    let calls = 0;
+    const inner: LlmTransport = {
+      complete: async () => {
+        calls += 1;
+        return completion;
+      },
+    };
+    const limited = withRequestLimit(inner, limiter);
+
+    await limited.complete(request, options);
+    await limited.complete(request, options);
+    expect(calls).toBe(2);
+    expect(sleeps).toHaveLength(1);
+  });
 });
 
 describe("runComparison", () => {
@@ -154,7 +243,7 @@ describe("runComparison", () => {
     const good = results[0]!;
     expect(good.toolAccuracy).toBe(1);
     expect(good.argsAccuracy).toBe(1);
-    expect(good.hallucinatedToolRate).toBe(0);
+    expect(good.fabricatedToolRate).toBe(0);
     expect(good.writeProposalRate).toBe(1);
     expect(good.costUsd).not.toBeNull();
     expect(good.cases.map((entry) => entry.id)).toEqual([
@@ -182,7 +271,9 @@ describe("runComparison", () => {
 
     expect(results[0]?.error).toContain("boom");
     expect(results[0]?.passed).toBe(0);
-    expect(results[0]?.cases).toEqual([]);
+    // Every case is kept as a diagnosed error instead of discarding the run.
+    expect(results[0]?.cases).toHaveLength(3);
+    expect(results[0]?.cases.every((entry) => entry.failure?.kind === "case_error")).toBe(true);
   });
 });
 
@@ -202,11 +293,12 @@ describe("comparison artifacts", () => {
       passed: 3,
       toolAccuracy: 1,
       argsAccuracy: 1,
-      hallucinatedToolRate: 0,
+      fabricatedToolRate: 0,
       writeProposalRate: 1,
       latencyMs: { p50: 10, p95: 20 },
       tokens: { prompt: 100, completion: 50, total: 150 },
       costUsd: null,
+      skipped: 0,
       cases: [],
     };
 
@@ -229,11 +321,12 @@ describe("comparison artifacts", () => {
           passed: 3,
           toolAccuracy: 1,
           argsAccuracy: 0.9,
-          hallucinatedToolRate: 0,
+          fabricatedToolRate: 0,
           writeProposalRate: 1,
           latencyMs: { p50: 100, p95: 250 },
           tokens: { prompt: 1000, completion: 200, total: 1200 },
           costUsd: 0.0012,
+          skipped: 0,
           cases: [],
         },
         {
@@ -243,18 +336,19 @@ describe("comparison artifacts", () => {
           passed: 1,
           toolAccuracy: 0.33,
           argsAccuracy: 0.33,
-          hallucinatedToolRate: 0.1,
+          fabricatedToolRate: 0.1,
           writeProposalRate: 0,
           latencyMs: { p50: 200, p95: 400 },
           tokens: { prompt: 900, completion: 100, total: 1000 },
           costUsd: null,
+          skipped: 0,
           cases: [],
         },
       ],
       { note: "precios [VERIFY]", models: {} },
     );
 
-    expect(table).toContain("| Modelo |");
+    expect(table).toContain("| Modelo");
     expect(table).toContain("`a`");
     expect(table).toContain("100.0%");
     expect(table).toContain("$0.0012");
@@ -263,6 +357,50 @@ describe("comparison artifacts", () => {
     expect(table).toContain("precios [VERIFY]");
     // Best tool accuracy first.
     expect(table.indexOf("`a`")).toBeLessThan(table.indexOf("`b`"));
+  });
+
+  it("emits a table Prettier would not reflow, with notes after a blank line", () => {
+    const base: ModelRunResult = {
+      model: "qwen3.6",
+      ranAt: "2026-01-14T18:00:00.000Z",
+      total: 87,
+      passed: 60,
+      toolAccuracy: 0.828,
+      argsAccuracy: 0.563,
+      fabricatedToolRate: 0.126,
+      writeProposalRate: 1,
+      latencyMs: { p50: 900, p95: 2400 },
+      tokens: { prompt: 12_000, completion: 900, total: 12_900 },
+      costUsd: null,
+      skipped: 0,
+      cases: [],
+    };
+
+    const table = renderComparisonTable(
+      [
+        base,
+        {
+          ...base,
+          model: "deepseek-v4-flash",
+          error: "Model deepseek-v4-flash failed",
+          cases: [],
+        },
+      ],
+      { note: "precios [VERIFY] y acentos: sí", models: {} },
+    );
+
+    const lines = table.split("\n");
+    const tableLines = lines.filter((line) => line.startsWith("|"));
+    // Every table row has the same width, so Prettier has nothing to pad.
+    const widths = new Set(tableLines.map((line) => line.length));
+    expect(widths.size).toBe(1);
+    // The note is a blockquote and needs the blank line Prettier inserts.
+    const noteIndex = lines.findIndex((line) => line.startsWith(">"));
+    expect(noteIndex).toBeGreaterThan(0);
+    expect(lines[noteIndex - 1]).toBe("");
+    // The separator row is dashes only, filled to the column width.
+    expect(tableLines[1]?.replace(/[\s|-]/gu, "")).toBe("");
+    expect(tableLines[1]).toContain("----------");
   });
 
   it("replaces the README block between the markers", () => {
