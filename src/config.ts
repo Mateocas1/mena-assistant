@@ -34,6 +34,18 @@ export interface AppConfig {
   readonly auditLogFile?: string;
   /** Heartbeat file and interval used by the offline container healthcheck. */
   readonly health: { readonly file: string; readonly intervalMs: number };
+  readonly stock: {
+    readonly backend: "mock" | "http";
+    /** mena-nails API origin; required when `backend` is `http`. */
+    readonly apiBaseUrl?: string;
+    readonly token?: string;
+    readonly timeoutMs: number;
+    readonly alerts: {
+      readonly enabled: boolean;
+      readonly intervalMs: number;
+      readonly chatId?: string;
+    };
+  };
   /** 08:00 ART summary pushed to every allow-listed chat. */
   readonly dailySummary: { readonly enabled: boolean; readonly hour: number };
   /** Backend liveness monitor that alerts Mateo after consecutive failures. */
@@ -120,6 +132,14 @@ const envSchema = z
     ASSISTANT_TOKEN: z.string().min(1).optional(),
     TURNOS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
+    STOCK_BACKEND: z.enum(["mock", "http"]).default("mock"),
+    MENA_NAILS_API_URL: z.string().url().optional(),
+    MENA_NAILS_TOKEN: z.string().min(1).optional(),
+    MENA_NAILS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+    STOCK_ALERT_ENABLED: boolFromEnv("false"),
+    STOCK_ALERT_INTERVAL_SECONDS: z.coerce.number().int().positive().default(1_800),
+    STOCK_ALERT_CHAT_ID: z.string().min(1).optional(),
+
     FEATURE_TURNOS: boolFromEnv("true"),
     FEATURE_STOCK: boolFromEnv("false"),
     FEATURE_TAREAS: boolFromEnv("false"),
@@ -137,6 +157,22 @@ const envSchema = z
     MCP_PROFILE: z.enum(PROFILE_NAMES).default("mateo"),
   })
   .superRefine((env, ctx) => {
+    if (env.STOCK_BACKEND === "http") {
+      if (!env.MENA_NAILS_API_URL) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["MENA_NAILS_API_URL"],
+          message: "MENA_NAILS_API_URL is required when STOCK_BACKEND=http",
+        });
+      }
+      if (!env.MENA_NAILS_TOKEN) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["MENA_NAILS_TOKEN"],
+          message: "MENA_NAILS_TOKEN is required when STOCK_BACKEND=http",
+        });
+      }
+    }
     if (env.TURNOS_BACKEND === "http") {
       if (!env.ASSISTANT_API_BASE_URL) {
         ctx.addIssue({
@@ -201,6 +237,17 @@ export function parseConfig(env: EnvRecord): AppConfig {
     proposalTtlMs: value.PROPOSAL_TTL_MINUTES * 60_000,
     auditLogFile: value.AUDIT_LOG_FILE,
     health: { file: value.HEALTH_FILE, intervalMs: value.HEALTH_INTERVAL_SECONDS * 1000 },
+    stock: {
+      backend: value.STOCK_BACKEND,
+      apiBaseUrl: value.MENA_NAILS_API_URL,
+      token: value.MENA_NAILS_TOKEN,
+      timeoutMs: value.MENA_NAILS_TIMEOUT_MS,
+      alerts: {
+        enabled: value.STOCK_ALERT_ENABLED,
+        intervalMs: value.STOCK_ALERT_INTERVAL_SECONDS * 1000,
+        chatId: value.STOCK_ALERT_CHAT_ID,
+      },
+    },
     dailySummary: { enabled: value.DAILY_SUMMARY_ENABLED, hour: value.DAILY_SUMMARY_HOUR },
     healthAlert: {
       enabled: value.HEALTH_ALERT_ENABLED,

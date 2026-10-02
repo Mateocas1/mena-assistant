@@ -43,6 +43,13 @@ export function extractDate(question: string, clock: Clock): string | undefined 
   return undefined;
 }
 
+const STOCK_PATTERN = /(stock|insumo|inventario)/;
+const STOCK_ALERT_PATTERN = /(alerta|umbral|por acabar|por debajo|bajando)/;
+const STOCK_LOG_PATTERN = /(servicios? registrados?|servicios? recientes?|ultimos servicios?)/;
+const STOCK_PRICE_PATTERN = /(historial de precios|precios de mena|precios de los servicios)/;
+const STOCK_CATALOG_PATTERN = /(catalogo|colores)/;
+const REGISTRAR_PATTERN = /(registrar?|descont\w*|procesar?)\s+(el\s+)?servicio/;
+
 const COMPLETAR_PATTERN = /(complet|finaliz)/;
 const CREAR_PATTERN =
   /(cre(a|á) (un )?turno|crear (un )?turno|agend(a|á) (un )?turno|reserv(a|á) (un )?turno|nuevo turno para)/;
@@ -75,6 +82,26 @@ function extractVerificationId(text: string): string | undefined {
 
 function extractSlot(text: string): string | undefined {
   return text.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0];
+}
+
+function extractColorItemId(text: string): number | undefined {
+  const match = text.match(/color\s*(?:item\s*)?(\d+)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function extractTipAllocation(text: string): { itemId: number; units: number } | undefined {
+  const match = text.match(/(\d+)\s*tips?[^\d]*item\s*(\d+)/);
+  if (!match) return undefined;
+  return { itemId: Number(match[2]), units: Number(match[1]) };
+}
+
+function extractStockServiceKey(
+  text: string,
+): "soft_gel" | "capping" | "semipermanente" | undefined {
+  if (text.includes("soft gel") || text.includes("soft_gel")) return "soft_gel";
+  if (text.includes("capping")) return "capping";
+  if (text.includes("semipermanente") || text.includes("semi")) return "semipermanente";
+  return undefined;
 }
 
 function extractSlug(text: string): string | undefined {
@@ -216,6 +243,58 @@ function planRangeArgs(text: string, question: string, clock: Clock): Record<str
   return date ? { desde: date, hasta: date } : {};
 }
 
+/** Stock intents; checked before the booking rules so `stock.*` wins its phrases. */
+function planStockCall(
+  text: string,
+  question: string,
+  has: (name: string) => boolean,
+): PlannedToolCall | null {
+  if (REGISTRAR_PATTERN.test(text) && has("stock.registrar_servicio")) {
+    const servicio = extractStockServiceKey(text);
+    const colorItemId = extractColorItemId(text);
+    // Without a service and a colour the phrase was not a registration intent.
+    if (servicio && colorItemId !== undefined) {
+      const tip = extractTipAllocation(text);
+      const appointmentId = extractAppointmentId(text);
+      return {
+        tool: "stock.registrar_servicio",
+        args: {
+          servicio,
+          colorItemId,
+          ...(tip ? { tips: [tip] } : {}),
+          ...(appointmentId ? { sourceAppointmentId: appointmentId } : {}),
+        },
+      };
+    }
+  }
+
+  if (STOCK_PATTERN.test(text) && STOCK_ALERT_PATTERN.test(text) && has("stock.alertas")) {
+    return { tool: "stock.alertas", args: {} };
+  }
+
+  if (STOCK_LOG_PATTERN.test(text) && has("stock.servicios_recientes")) {
+    const limit = text.match(/(?:ultimos|ultimas)\s+(\d+)\s+servicios/);
+    return { tool: "stock.servicios_recientes", args: limit ? { limit: Number(limit[1]) } : {} };
+  }
+
+  if (STOCK_PRICE_PATTERN.test(text) && has("stock.precios")) {
+    return { tool: "stock.precios", args: {} };
+  }
+
+  if (STOCK_CATALOG_PATTERN.test(text) && has("stock.catalogo")) {
+    return {
+      tool: "stock.catalogo",
+      args: /colores/.test(text) ? { solo_colores: true } : {},
+    };
+  }
+
+  if (STOCK_PATTERN.test(text) && has("stock.actual")) {
+    return { tool: "stock.actual", args: {} };
+  }
+
+  return null;
+}
+
 /**
  * The deterministic stand-in for the model used by `pnpm eval` in CI. It is not
  * a quality measurement of any real model; it locks tool selection and argument
@@ -230,6 +309,9 @@ export function planToolCall(
   const text = normalize(question);
   const has = (name: string) => availableTools.includes(name);
   const fecha = extractDate(question, clock);
+
+  const stock = planStockCall(text, question, has);
+  if (stock) return stock;
 
   const write = planWriteCall(text, question, has, fecha);
   if (write) return write;

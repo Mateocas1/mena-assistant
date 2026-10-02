@@ -1,3 +1,4 @@
+import type { StockBackend } from "../adapters/stock/client.js";
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { AuditLogger, hashChatId } from "../audit/index.js";
 import type { AppConfig, ProfileName } from "../config.js";
@@ -22,6 +23,8 @@ export interface BotDeps {
   readonly config: AppConfig;
   readonly registry: ToolRegistry;
   readonly backend: TurnosBackend;
+  /** mena-nails stock backend; only wired when `FEATURE_STOCK` is on. */
+  readonly stock?: StockBackend;
   readonly proposals: ProposalStore;
   readonly transport: LlmTransport;
   readonly audit: AuditLogger;
@@ -45,6 +48,24 @@ export interface IncomingCallback {
   readonly proposalId: string;
 }
 
+/** Hint the completion tool returns so the bot can ask for the missing stock data. */
+export interface StockChainHint {
+  readonly serviceKey: string;
+  readonly requiresTips: boolean;
+  readonly serviceName?: string;
+  readonly sourceAppointmentId?: string;
+}
+
+/** User-facing follow-up: asks only for what the appointment does not carry. */
+export function stockChainPrompt(chain: StockChainHint): string {
+  const color = "decime el color que usaste";
+  const tips = chain.requiresTips ? " y los tips (forma y talle, 10 en total)" : "";
+  const turno = chain.sourceAppointmentId
+    ? ` Así queda ligado al turno ${chain.sourceAppointmentId}.`
+    : "";
+  return `Para descontar el stock de ese servicio, ${color}${tips}.${turno}`;
+}
+
 export interface BotCallbackResult {
   readonly kind: "ignored" | "reply";
   readonly text?: string;
@@ -53,6 +74,7 @@ export interface BotCallbackResult {
 function toolContext(deps: BotDeps, profile: ProfileName, chatId: string): ToolHandlerContext {
   return {
     backend: deps.backend,
+    ...(deps.stock ? { stock: deps.stock } : {}),
     proposals: deps.proposals,
     clock: deps.clock ?? systemClock,
     profile,
@@ -95,7 +117,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
         maxToolCalls: deps.config.llm.maxToolCalls,
       },
       audit: deps.audit,
-      systemPrompt: buildSystemPrompt(clock),
+      systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
       userMessage: message.text,
     });
 
@@ -206,7 +228,7 @@ export async function handleCallback(
 
   try {
     const result = await tool.executeProposal(proposal.args, toolContext(deps, profile, chatId));
-    const data = result.data as { refundRequired?: boolean } | undefined;
+    const data = result.data as { refundRequired?: boolean; chain?: StockChainHint } | undefined;
     const extra = data?.refundRequired ? " Quedó un reintegro pendiente de revisar." : "";
 
     deps.audit.log({
@@ -216,9 +238,14 @@ export async function handleCallback(
       proposalId: proposal.id,
       tool: proposal.tool,
       status: "ok",
+      ...(data?.chain ? { detail: `stock_chain:${data.chain.serviceKey}` } : {}),
     });
 
-    return { kind: "reply", text: `✅ ${proposal.summary}.${extra}` };
+    // Confirming a completion opens the stock chain: ask for what is missing.
+    const followUp =
+      deps.config.features.stock && data?.chain ? `\n\n${stockChainPrompt(data.chain)}` : "";
+
+    return { kind: "reply", text: `✅ ${proposal.summary}.${extra}${followUp}` };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     // Adapter errors carry Spanish copy for the user; anything else stays generic.

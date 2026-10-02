@@ -8,7 +8,7 @@ const clock = fixedClock("2026-01-14T15:00:00Z"); // Wednesday 12:00 ART
 
 describe("evals v0", () => {
   it("has at least 35 cases and passes all of them with the scripted model", async () => {
-    expect(EVAL_CASES.length).toBeGreaterThanOrEqual(55);
+    expect(EVAL_CASES.length).toBeGreaterThanOrEqual(70);
 
     const report = await runEvals({
       cases: EVAL_CASES,
@@ -39,6 +39,12 @@ describe("evals v0", () => {
       "turnos.reprogramar",
       "pagos.confirmar_transferencia",
       "pagos.rechazar_transferencia",
+      "stock.actual",
+      "stock.alertas",
+      "stock.servicios_recientes",
+      "stock.precios",
+      "stock.catalogo",
+      "stock.registrar_servicio",
     ]) {
       expect(covered).toContain(tool);
     }
@@ -47,7 +53,11 @@ describe("evals v0", () => {
 
   it("never executes a write while evaluating", async () => {
     const report = await runEvals({
-      cases: EVAL_CASES.filter((evalCase) => evalCase.expectedTool?.startsWith("turnos.")),
+      cases: EVAL_CASES.filter(
+        (evalCase) =>
+          evalCase.expectedTool?.startsWith("turnos.") ||
+          evalCase.expectedTool === "stock.registrar_servicio",
+      ),
       transport: createScriptedTransport(clock),
       clock,
     });

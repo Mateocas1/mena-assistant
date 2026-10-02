@@ -1,4 +1,4 @@
-import { createTurnosBackend } from "./adapters/index.js";
+import { createStockBackend, createTurnosBackend } from "./adapters/index.js";
 import { AuditLogger, createFileSink } from "./audit/index.js";
 import { createBot } from "./bot/index.js";
 import type { BotDeps } from "./bot/core.js";
@@ -9,6 +9,7 @@ import { createToolRegistry } from "./mcp/tools/index.js";
 import { ProposalStore } from "./proposals/store.js";
 import { startDailySummary } from "./schedule/daily-summary.js";
 import { createHealthMonitor, resolveHealthAlertChat } from "./schedule/health-monitor.js";
+import { createStockAlertMonitor } from "./schedule/stock-alerts.js";
 import { systemClock, type Clock } from "./time/index.js";
 
 export interface CreateDepsOptions {
@@ -23,6 +24,7 @@ export function createBotDeps(config: AppConfig, options: CreateDepsOptions = {}
     config,
     registry: createToolRegistry(config.features),
     backend: createTurnosBackend(config, options.clock ? { clock: options.clock } : {}),
+    ...(config.features.stock ? { stock: createStockBackend(config) } : {}),
     proposals: new ProposalStore({
       ttlMs: config.proposalTtlMs,
       ...(options.clock ? { clock: options.clock } : {}),
@@ -36,6 +38,14 @@ export function createBotDeps(config: AppConfig, options: CreateDepsOptions = {}
       }),
     ...(options.clock ? { clock: options.clock } : {}),
   };
+}
+
+/** First allow-listed chat with a profile, used as the default alert target. */
+function firstChatFor(
+  allowlist: Readonly<Record<string, "romi" | "mateo">>,
+  profile: "romi" | "mateo",
+): string | undefined {
+  return Object.entries(allowlist).find(([, value]) => value === profile)?.[0];
 }
 
 async function main(): Promise<void> {
@@ -79,6 +89,7 @@ async function main(): Promise<void> {
     intervalMs: config.health.intervalMs,
   });
 
+  const allowlist = config.telegram.allowlist;
   const sendToChat = async (chatId: string, text: string): Promise<void> => {
     await bot.api.sendMessage(chatId, text);
   };
@@ -91,9 +102,27 @@ async function main(): Promise<void> {
         send: sendToChat,
         clock: systemClock,
         features: config.features,
+        ...(deps.stock ? { stock: deps.stock } : {}),
         hour: config.dailySummary.hour,
       })
     : (): void => {};
+
+  const stockAlertChat = config.stock.alerts.chatId ?? firstChatFor(allowlist, "romi");
+  const stopStockAlerts =
+    config.features.stock && config.stock.alerts.enabled && deps.stock && stockAlertChat
+      ? createStockAlertMonitor({
+          probe: async () =>
+            (await deps.stock!.alertas()).map((item) => ({
+              itemId: item.itemId,
+              label: item.label,
+              units: item.units,
+            })),
+          notify: sendToChat,
+          chatId: stockAlertChat,
+          audit: deps.audit,
+          intervalMs: config.stock.alerts.intervalMs,
+        }).start()
+      : (): void => {};
 
   const alertChat = resolveHealthAlertChat(config.telegram.allowlist, config.healthAlert.chatId);
   if (config.healthAlert.enabled && !alertChat) {
@@ -116,6 +145,9 @@ async function main(): Promise<void> {
       : (): void => {};
 
   console.error(
+    `[mena-assistant] stock=${config.features.stock ? config.stock.backend : "off"} stockAlerts=${config.features.stock && config.stock.alerts.enabled && stockAlertChat ? "on" : "off"}`,
+  );
+  console.error(
     `[mena-assistant] starting long polling — model=${config.llm.model} fallback=${config.llm.fallbackModel} turnos=${config.turnos.backend} health=${config.health.file} summary=${config.dailySummary.enabled ? `${config.dailySummary.hour}:00 ART` : "off"} alerts=${config.healthAlert.enabled && alertChat ? "on" : "off"}`,
   );
 
@@ -124,6 +156,7 @@ async function main(): Promise<void> {
     stopLiveness();
     stopSummary();
     stopHealth();
+    stopStockAlerts();
     await bot.stop();
   };
   process.once("SIGINT", () => void stop("SIGINT"));

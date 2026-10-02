@@ -272,6 +272,53 @@ describe("write proposals require a verified callback", () => {
     expect(test.backend.cancelCalls).toEqual([]);
   });
 
+  it("asks for the missing stock data after a completion is confirmed", async () => {
+    const { deps } = setup(
+      [
+        toolCallCompletion("turnos.marcar_completado", {
+          appointmentId: "apt_past_0800",
+          fecha: "2026-01-07",
+        }),
+        textCompletion("Listo."),
+      ],
+      { features: { turnos: true, stock: true, tareas: false } },
+    );
+
+    const reply = await propose(deps);
+    expect(reply.proposals[0]?.tool).toBe("turnos.marcar_completado");
+
+    const outcome = await handleCallback(deps, {
+      chatId: ROMI,
+      action: "confirm",
+      proposalId: reply.proposals[0]!.id,
+    });
+
+    expect(outcome.text).toContain("✅");
+    expect(outcome.text).toContain("decime el color que usaste");
+    expect(outcome.text).toContain("tips (forma y talle, 10 en total)");
+    expect(outcome.text).toContain("apt_past_0800");
+  });
+
+  it("does not ask for stock data when the stock flag is off", async () => {
+    const { deps } = setup([
+      toolCallCompletion("turnos.marcar_completado", {
+        appointmentId: "apt_past_0800",
+        fecha: "2026-01-07",
+      }),
+      textCompletion("Listo."),
+    ]);
+
+    const reply = await propose(deps);
+    const outcome = await handleCallback(deps, {
+      chatId: ROMI,
+      action: "confirm",
+      proposalId: reply.proposals[0]!.id,
+    });
+
+    expect(outcome.text).toContain("✅");
+    expect(outcome.text).not.toContain("decime el color");
+  });
+
   it("executes a non-cancel write only through its callback", async () => {
     const { deps, test } = setup([
       toolCallCompletion("turnos.bloquear", { fecha: "2026-01-20", hora: "16:30" }),

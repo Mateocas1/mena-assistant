@@ -9,6 +9,10 @@ import {
   type ToolHandlerContext,
   type ToolResult,
 } from "../registry.js";
+import {
+  mapBookingServiceToStockKey,
+  serviceRequiresTips,
+} from "../../adapters/stock/booking-mapping.js";
 import { translateTurnosError } from "./turnos-errors.js";
 import {
   FECHA_DESCRIPTION,
@@ -16,6 +20,7 @@ import {
   assertBookableDate,
   describeAppointment,
   findAppointment,
+  findRecentAppointment,
   resolveDateOrArgumentError,
   slotField,
 } from "./turnos-shared.js";
@@ -117,9 +122,13 @@ export function createTurnosWriteTools(): ToolDefinition[] {
           .string()
           .optional()
           .describe(`${FECHA_DESCRIPTION} Día del turno, para mostrar el detalle.`),
+        // Filled by the tool from the booking; the model never has to know it.
+        serviceName: z.string().optional().describe("lo completa el asistente desde el turno"),
       }),
       async propose(args, context) {
-        const appointment = await findAppointment(context, args.fecha, args.appointmentId);
+        const appointment =
+          (await findAppointment(context, args.fecha, args.appointmentId)) ??
+          (await findRecentAppointment(context, args.appointmentId));
         const summary = `Marcar como completado el turno ${args.appointmentId}${
           appointment ? ` — ${describeAppointment(appointment)}` : ""
         }`;
@@ -131,7 +140,11 @@ export function createTurnosWriteTools(): ToolDefinition[] {
         return propose(
           "turnos.marcar_completado",
           context,
-          { appointmentId: args.appointmentId, fecha: args.fecha },
+          {
+            appointmentId: args.appointmentId,
+            fecha: args.fecha,
+            ...(appointment ? { serviceName: appointment.serviceName } : {}),
+          },
           summary,
           `- ${before}\n+ ${after}`,
         );
@@ -139,9 +152,27 @@ export function createTurnosWriteTools(): ToolDefinition[] {
       async executeProposal(args, context) {
         try {
           await context.backend.marcarCompletado(args.appointmentId);
+
+          // Stock chain: the caller decides whether to act on this hint.
+          const serviceKey = args.serviceName
+            ? mapBookingServiceToStockKey(args.serviceName)
+            : undefined;
+          const chain = serviceKey
+            ? {
+                serviceKey,
+                requiresTips: serviceRequiresTips(serviceKey),
+                serviceName: args.serviceName ?? serviceKey,
+                sourceAppointmentId: args.appointmentId,
+              }
+            : undefined;
+
           return {
-            content: JSON.stringify({ completed: true, appointmentId: args.appointmentId }),
-            data: { success: true, appointmentId: args.appointmentId },
+            content: JSON.stringify({
+              completed: true,
+              appointmentId: args.appointmentId,
+              ...(chain ? { stockChain: chain } : {}),
+            }),
+            data: { success: true, appointmentId: args.appointmentId, ...(chain ? { chain } : {}) },
           };
         } catch (error) {
           throw translateTurnosError(error, "No pude marcar el turno como completado.");

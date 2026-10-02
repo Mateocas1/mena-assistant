@@ -1,4 +1,5 @@
 import { hashChatId, type AuditLogger } from "../audit/index.js";
+import type { StockBackend, StockEntry } from "../adapters/stock/client.js";
 import type { Appointment, PendingPayments } from "../adapters/turnos/client.js";
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import type { ChatAllowlist } from "../bot/allowlist.js";
@@ -17,6 +18,8 @@ export interface DailySummaryData {
   readonly counts: Readonly<Record<string, number>>;
   readonly revenue: number;
   readonly pending: PendingPayments;
+  /** Present only when `FEATURE_STOCK` is on and the stock read succeeded. */
+  readonly stockAlerts?: readonly StockEntry[];
 }
 
 export interface DailySummaryDeps {
@@ -25,7 +28,8 @@ export interface DailySummaryDeps {
   readonly audit: AuditLogger;
   readonly send: (chatId: string, text: string) => Promise<void>;
   readonly clock?: Clock;
-  readonly features: { readonly tareas: boolean };
+  readonly features: { readonly tareas: boolean; readonly stock?: boolean };
+  readonly stock?: StockBackend;
   readonly hour?: number;
 }
 
@@ -87,6 +91,15 @@ export function buildDailySummary(
     `Reintegros pendientes: ${data.pending.reintegros.count} · $${data.pending.reintegros.totalAmount}`,
   );
 
+  if (data.stockAlerts !== undefined) {
+    lines.push("");
+    lines.push(`Insumos con alerta: ${data.stockAlerts.length}`);
+    for (const item of data.stockAlerts) {
+      const units = item.units === null ? "sin unidades confirmadas" : `${item.units} unidades`;
+      lines.push(`- ${item.label} · ${units}`);
+    }
+  }
+
   if (profile === "mateo" && !options.tareasEnabled) {
     lines.push("");
     lines.push("Tareas: todavía no están conectadas (M5).");
@@ -127,12 +140,28 @@ export async function runDailySummary(deps: DailySummaryDeps): Promise<void> {
     return;
   }
 
+  // The stock section is best effort: a stock outage must not silence the day.
+  let stockAlerts: StockEntry[] | undefined;
+  if (deps.features.stock && deps.stock) {
+    try {
+      stockAlerts = await deps.stock.alertas();
+    } catch (error) {
+      deps.audit.log({
+        event: "daily_summary",
+        status: "error",
+        detail: "stock_unavailable",
+        error: messageOf(error),
+      });
+    }
+  }
+
   const data: DailySummaryData = {
     date,
     appointments,
     counts: summary.counts,
     revenue: summary.revenue,
     pending,
+    ...(stockAlerts === undefined ? {} : { stockAlerts }),
   };
 
   for (const [chatId, profile] of Object.entries(deps.allowlist)) {

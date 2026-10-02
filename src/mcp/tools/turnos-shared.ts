@@ -93,6 +93,24 @@ export async function findAppointment(
   }
 }
 
+/**
+ * Looks the appointment up in a recent window. Completion always refers to a
+ * past appointment, so this works when the model does not know its day.
+ */
+export async function findRecentAppointment(
+  context: ToolHandlerContext,
+  appointmentId: string,
+  days = 14,
+): Promise<Appointment | undefined> {
+  try {
+    const today = artToday(context.clock);
+    const appointments = await context.backend.rango(addDays(today, -days), today);
+    return appointments.find((appointment) => appointment.id === appointmentId);
+  } catch {
+    return undefined;
+  }
+}
+
 export function describeAppointment(appointment: Appointment, status = appointment.status): string {
   const who = appointment.clientName ?? "sin nombre";
   return `${appointment.date} ${appointment.timeSlot} · ${appointment.serviceName} · ${who} · ${status}`;

@@ -10,13 +10,14 @@ Romi (the salon owner) asks in a Telegram chat — "¿qué turnos tengo hoy?",
 and the assistant answers with real data and, for anything that mutates, returns
 a **proposal** she confirms with an inline **Confirmar / Cancelar** button.
 
-**Status: M2 (confirmed writes + daily summary).** The `turnos.*` / `pagos.*`
+**Status: M3 (stock).** The `turnos.*` / `pagos.*`
 tools run against the real `mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP
 actions when `TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors
 the same contract shapes (`mock`, the dev/CI default). Every write is
-confirm-gated. An in-process scheduler sends the 08:00 ART daily summary and a
-debounced backend health alert. `stock.*` / `tareas.*` are disabled stubs behind
-feature flags.
+confirm-gated. An in-process scheduler sends the 08:00 ART daily summary and debounced backend
+health/stock alerts. With `FEATURE_STOCK` the assistant also reads mena-nails
+stock and closes the "completed appointment → service log" chain. `tareas.*`
+stays a disabled stub (M5).
 
 ## Architecture
 
@@ -75,7 +76,8 @@ src/
     turnos/http.ts      real /assistant/* client (retry, timeout, Zod)
     turnos/mock.ts      fixture backend with the same semantics
     turnos/fixtures.ts  fixtures anchored on the clock's ART day
-    stock/ tareas/      disabled stubs behind feature flags
+    stock/              mena-nails client, mock, fixtures, service mapping
+    tareas/             disabled stub behind FEATURE_TAREAS
   proposals/store.ts    proposal registry (expiry + single use + chat bound)
   audit/                JSONL audit, PII redaction, file sink
   metrics/usage.ts      queries per profile per ISO week
@@ -83,6 +85,7 @@ src/
   time/                 America/Argentina/Buenos_Aires + injectable clock
 evals/                  40-case dataset, scripted (CI) and live runners
 scripts/metrics.ts      pnpm metrics CLI
+e2e/stock-idempotency.ts  compose e2e: a retried service log never deducts twice
 tests/                  vitest suites
 Dockerfile              multi-stage, non-root, node dist/index.js
 compose.assistant.yml   assistant service snippet for the VM compose
@@ -95,8 +98,8 @@ Requirements: Node 24 and pnpm 11.
 ```bash
 pnpm install
 cp .env.example .env      # fill in the values below
-pnpm test                 # 195 tests
-pnpm eval                 # 56/56 (scripted, deterministic)
+pnpm test                 # 242 tests
+pnpm eval                 # 71/71 (scripted, deterministic)
 pnpm dev                  # long polling with the mock backend
 ```
 
@@ -149,11 +152,18 @@ tools serve fixtures anchored on today's ART date. Point
 | `HEALTH_ALERT_FAILURES`         | `3`                           | Consecutive failures before the single alert.              |
 | `HEALTH_ALERT_CHAT_ID`          | first `mateo` chat            | Where health alerts go.                                    |
 | `MCP_PROFILE`                   | `mateo`                       | Profile the standalone MCP server acts as.                 |
+| `STOCK_BACKEND`                 | `mock`                        | `mock` (fixtures) or `http` (mena-nails API).              |
+| `MENA_NAILS_API_URL`            | —                             | mena-nails API origin; required with `http`.               |
+| `MENA_NAILS_TOKEN`              | —                             | Service credential (`svc_...`); required with `http`.      |
+| `MENA_NAILS_TIMEOUT_MS`         | `10000`                       | Per-request timeout for the stock API.                     |
+| `STOCK_ALERT_ENABLED`           | `false`                       | Deduped push when a new item drops below threshold.        |
+| `STOCK_ALERT_INTERVAL_SECONDS`  | `1800`                        | Stock alert poll interval.                                 |
+| `STOCK_ALERT_CHAT_ID`           | first `romi` chat              | Where stock alerts go.                                     |
 
 Invalid configuration fails fast at startup with the offending variables named
 (`node dist/index.js --check` validates without starting the bot).
 
-## Tools (M2)
+## Tools (M3)
 
 | Tool                                                        | Kind                 | Backend route it mirrors                        |
 | ----------------------------------------------------------- | -------------------- | ----------------------------------------------- |
@@ -171,6 +181,13 @@ Invalid configuration fails fast at startup with the offending variables named
 | `turnos.reprogramar(appointmentId, fecha, hora, …)`         | **write → proposal** | `POST /assistant/appointments/reschedule`       |
 | `pagos.confirmar_transferencia(verificationId)`             | **write → proposal** | `POST /assistant/transfers/confirm`             |
 | `pagos.rechazar_transferencia(verificationId, motivo)`      | **write → proposal** | `POST /assistant/transfers/reject`              |
+| `stock.actual()`                                            | read                 | `GET /stock`                                    |
+| `stock.alertas()`                                           | read                 | `GET /stock` (alert = low)                      |
+| `stock.servicios_recientes(limit?)`                         | read                 | `GET /services?limit=N`                         |
+| `stock.precios()`                                           | read                 | `GET /services/prices`                          |
+| `stock.catalogo(solo_colores?)`                             | read                 | `GET /catalog/items`                            |
+| `stock.registrar_servicio(servicio, colorItemId, tips?, …)` | **write → proposal** | `POST /services` (idempotent)                   |
+| `stock.proponer_correccion(tema, detalle)`                  | read (advisory)      | — (never calls the API)                         |
 
 Dates accept `YYYY-MM-DD`, `hoy` / `mañana` / `pasado mañana` / `ayer`, weekday
 names (`el jueves`) and `esta semana` / `la semana que viene` (ranges), always
@@ -198,6 +215,51 @@ A turn proposes **at most one write**. Further write tool calls in the same turn
 are refused (audited as `denied`) and answered with a tool result that tells the
 model to ask for confirmation on the pending action first; reads keep working.
 
+## Stock (mena-nails)
+
+With `FEATURE_STOCK=true` (and `STOCK_BACKEND=http` in production) the assistant
+reads the salon's stock over the internal network using a scoped service
+credential, and closes the loop from a finished appointment:
+
+1. Romi confirms `turnos.marcar_completado`. The tool maps the booking service to
+   a mena-nails key (`servicio-softgel` → `soft_gel`, `capping`,
+   `semipermanente`); `retiro-*` consumes nothing and is not registered.
+2. The bot asks only for what the appointment does not carry: the colour
+   (`stock.catalogo`) and, for Soft Gel, the tips (one shape/size, 10 units).
+3. The model proposes `stock.registrar_servicio` with
+   `sourceAppointmentId` = the appointment id; Romi confirms; the API call runs
+   with `retry: false`.
+4. An identical retry replays (`replayed: true`, "ya estaba registrado"); the
+   same appointment with different data returns 409 and changes nothing.
+
+**Rules taken from the mena-nails roadmap:** the bot never changes counts or
+prices. There is no stocktake or price tool for any profile — the assistant
+exposes `stock.proponer_correccion`, which returns advisory text and calls no
+endpoint, and directing Romi to the mena-nails panel. A test asserts no profile
+(including Mateo) can see a forbidden operation.
+
+### E2E: a retried service log never deducts twice
+
+```bash
+pnpm e2e:stock          # requires Docker + a mena-nails checkout
+```
+
+It brings up the mena-nails stack under the compose project `m3e2e` (never
+touching other containers), seeds the catalog, confirms a stocktake, posts the
+SAME service log twice with the same `sourceAppointmentId`, and asserts that
+`GET /stock` is identical between the two calls while the first one did move
+stock. It tears the stack down afterwards (`--keep` leaves it running). Paths
+and port: `MENA_NAILS_PATH` (default `../mena-nails`) and `M3E2E_API_PORT`
+(default `8080`, matching mena-nails' compose).
+
+### Known backend gap
+
+`GET /catalog/items` is owner-only in mena-nails (`serviceRouteAllowed` allows
+only `GET /stock`, `GET|POST /services` and `GET /services/prices`), so a service
+credential gets 403 there. `stock.catalogo` reports that clearly and the chain
+still proposes from the item id; adding `/catalog/items` to the service allowlist
+is a one-line change in `apps/api/internal/server/access.go`.
+
 ## Daily summary (08:00 ART)
 
 An in-process scheduler (no external cron) computes the next 08:00 in
@@ -217,7 +279,8 @@ Reintegros pendientes: 1 · $5000
 ```
 
 Romi gets the day's appointments, the pending verifications and the refund
-summary; Mateo gets the same plus a `tareas` placeholder while `FEATURE_TAREAS`
+summary; with `FEATURE_STOCK` the message also lists the items below their
+threshold. Mateo gets the same plus a `tareas` placeholder while `FEATURE_TAREAS`
 is off. If the backend is down the scheduler skips silently and audits
 `daily_summary / backend_unavailable` instead of sending a broken message.
 `DAILY_SUMMARY_ENABLED=false` turns it off and `DAILY_SUMMARY_HOUR` moves it.
@@ -251,11 +314,11 @@ button, so its proposals expire unless confirmed from the bot.
 ## Evals
 
 ```bash
-pnpm eval        # 56 cases, scripted transport + mock backend, deterministic, in CI
+pnpm eval        # 71 cases, scripted transport + mock backend, deterministic, in CI
 pnpm eval:live   # same dataset against a real model (needs LLM_API_KEY; never in CI)
 ```
 
-Current result: **56/56 passed · tool accuracy 100.0% · args accuracy 100.0%**
+Current result: **71/71 passed · tool accuracy 100.0% · args accuracy 100.0%**
 (scripted). The scripted transport is not a model-quality measurement: it pins
 tool selection and ART argument resolution so regressions fail in CI. Model
 comparison (`deepseek-v4-flash` vs `qwen3.8-flash` vs `glm5.3-flash` vs
@@ -361,8 +424,9 @@ Checked against <https://nan.builders/docs/models>:
   `LLM_API_KEY`), so real tool-calling behaviour, latency and cost are unmeasured.
   The four-way model comparison belongs to M4.
 
-## Next step (M3)
+## Next step (M4)
 
-Stock (needs mena-nails deployed): `stock.*` reads, `turnos.sincronizar_precios`
-(mena-nails owns prices) and the stock alerts, plus the "turno completado →
-descuento de stock" chain.
+Evals with real models (the comparison table: `deepseek-v4-flash` vs
+`glm5.3-flash` vs `qwen3.8-flash` vs `qwen3.6`), the full 50–100 case dataset
+and the case study. `turnos.sincronizar_precios` remains out of scope: mena-nails
+owns prices.

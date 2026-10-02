@@ -19,6 +19,7 @@
     "src/**/*.ts",
     "evals/**/*.ts",
     "scripts/**/*.ts",
+    "e2e/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"
   ]

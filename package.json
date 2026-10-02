@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "eval": "tsx evals/run.ts",
     "eval:live": "tsx evals/run-live.ts",
+    "e2e:stock": "tsx e2e/stock-idempotency.ts",
     "metrics": "tsx scripts/metrics.ts"
   },
   "dependencies": {

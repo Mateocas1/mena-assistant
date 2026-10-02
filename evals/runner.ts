@@ -1,3 +1,4 @@
+import { MockStockBackend } from "../src/adapters/stock/mock.js";
 import { MockTurnosBackend } from "../src/adapters/turnos/mock.js";
 import { createTurnosFixtures } from "../src/adapters/turnos/fixtures.js";
 import { AuditLogger } from "../src/audit/index.js";
@@ -38,7 +39,7 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalReport> {
   const fallbackModel = options.fallbackModel ?? "glm5.3-flash";
   const maxToolCalls = options.maxToolCalls ?? 6;
   const referenceDate = artToday(options.clock);
-  const registry = createToolRegistry({ turnos: true, stock: false, tareas: false });
+  const registry = createToolRegistry({ turnos: true, stock: true, tareas: false });
 
   const results: EvalCaseResult[] = [];
 
@@ -52,6 +53,7 @@ export async function runEvals(options: RunEvalsOptions): Promise<EvalReport> {
       tools: registry.forProfile(evalCase.profile),
       context: {
         backend,
+        stock: new MockStockBackend(),
         proposals,
         clock: options.clock,
         profile: evalCase.profile,

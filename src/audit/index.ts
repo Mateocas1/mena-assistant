@@ -15,6 +15,7 @@ export type AuditEvent =
   | "proposal_cancelled"
   | "daily_summary"
   | "health_alert"
+  | "stock_alert"
   | "error";
 
 export type AuditStatus = "ok" | "error" | "proposal" | "denied";

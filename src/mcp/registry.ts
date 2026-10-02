@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { StockBackend } from "../adapters/stock/client.js";
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { isToolAllowed } from "../bot/allowlist.js";
 import type { ProfileName } from "../config.js";
@@ -8,6 +9,8 @@ import { systemClock, type Clock } from "../time/index.js";
 /** Everything a tool handler may touch, assembled once per conversation. */
 export interface ToolHandlerContext {
   readonly backend: TurnosBackend;
+  /** Present only when `FEATURE_STOCK` is on. */
+  readonly stock?: StockBackend;
   readonly proposals: ProposalStore;
   readonly clock: Clock;
   readonly profile: ProfileName;

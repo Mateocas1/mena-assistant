@@ -1,3 +1,4 @@
+import { MockStockBackend } from "../../src/adapters/stock/mock.js";
 import { MockTurnosBackend } from "../../src/adapters/turnos/mock.js";
 import { createTurnosFixtures } from "../../src/adapters/turnos/fixtures.js";
 import { ProposalStore } from "../../src/proposals/store.js";
@@ -69,5 +70,22 @@ export function makeTestContext(
       profile: overrides.profile ?? "romi",
       chatId: overrides.chatId ?? TEST_CHAT_ID,
     },
+  };
+}
+
+export interface StockTestContext {
+  readonly context: ToolHandlerContext;
+  readonly stock: MockStockBackend;
+  readonly proposals: ProposalStore;
+}
+
+/** Turnos + stock context with the in-memory stock backend. */
+export function makeStockTestContext(): StockTestContext {
+  const base = makeTestContext();
+  const stock = new MockStockBackend();
+  return {
+    stock,
+    proposals: base.proposals,
+    context: { ...base.context, stock },
   };
 }

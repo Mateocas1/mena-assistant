@@ -25,6 +25,13 @@ describe("parseConfig", () => {
     expect(config.features).toEqual({ turnos: true, stock: false, tareas: false });
     expect(config.proposalTtlMs).toBe(10 * 60_000);
     expect(config.dailySummary).toEqual({ enabled: true, hour: 8 });
+    expect(config.stock).toEqual({
+      backend: "mock",
+      apiBaseUrl: undefined,
+      token: undefined,
+      timeoutMs: 10_000,
+      alerts: { enabled: false, intervalMs: 1_800_000, chatId: undefined },
+    });
     expect(config.healthAlert).toEqual({
       enabled: false,
       intervalMs: 300_000,
@@ -101,6 +108,32 @@ describe("parseConfig", () => {
       intervalMs: 60_000,
       failureThreshold: 5,
       chatId: "222",
+    });
+  });
+
+  it("fails fast when the http stock backend is selected without credentials", () => {
+    expect(() => parseConfig({ ...baseEnv, STOCK_BACKEND: "http" })).toThrow(/MENA_NAILS_API_URL/);
+    expect(() =>
+      parseConfig({
+        ...baseEnv,
+        STOCK_BACKEND: "http",
+        MENA_NAILS_API_URL: "http://api:8080",
+      }),
+    ).toThrow(/MENA_NAILS_TOKEN/);
+    expect(
+      parseConfig({
+        ...baseEnv,
+        STOCK_BACKEND: "http",
+        MENA_NAILS_API_URL: "http://api:8080",
+        MENA_NAILS_TOKEN: "svc_x",
+        STOCK_ALERT_ENABLED: "true",
+        STOCK_ALERT_CHAT_ID: "111",
+      }).stock,
+    ).toMatchObject({
+      backend: "http",
+      apiBaseUrl: "http://api:8080",
+      token: "svc_x",
+      alerts: { enabled: true, chatId: "111" },
     });
   });
 

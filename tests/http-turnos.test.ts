@@ -8,11 +8,7 @@ import {
   TurnosResponseError,
   TurnosTimeoutError,
 } from "../src/adapters/turnos/client.js";
-import {
-  HttpTurnosClient,
-  type FetchLike,
-  type HttpTurnosClientOptions,
-} from "../src/adapters/turnos/http.js";
+import { HttpTurnosClient, type HttpTurnosClientOptions } from "../src/adapters/turnos/http.js";
 import { fixedClock } from "../src/time/index.js";
 
 // 01:30 UTC is 22:30 on 2026-01-14 in Buenos Aires.
@@ -39,44 +35,11 @@ const VERIFICATION = {
   clientName: "Ana G.",
 };
 
-type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
+import { ScriptedFetch, jsonResponse, type FetchHandler } from "./helpers/fetch.js";
 
-interface RecordedCall {
-  readonly url: string;
-  readonly init: RequestInit;
-  readonly body: unknown;
-}
-
-class ScriptedFetch {
-  readonly calls: RecordedCall[] = [];
-  private readonly handlers: Handler[];
-
-  constructor(handlers: Handler[]) {
-    this.handlers = [...handlers];
-  }
-
-  readonly fetch: FetchLike = async (url, init) => {
-    const raw = init.body;
-    this.calls.push({
-      url,
-      init,
-      body: typeof raw === "string" && raw.length > 0 ? JSON.parse(raw) : undefined,
-    });
-    const handler = this.handlers.shift();
-    if (!handler) throw new Error(`ScriptedFetch has no handler left for ${url}`);
-    return await handler(url, init);
-  };
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
+/** The turnos backend answers with `{error: message}` JSON. */
 function errorBody(message: string, status: number): Response {
-  return json({ error: message }, status);
+  return jsonResponse({ error: message }, status);
 }
 
 function makeClient(script: ScriptedFetch, overrides: Partial<HttpTurnosClientOptions> = {}) {
@@ -93,7 +56,7 @@ function makeClient(script: ScriptedFetch, overrides: Partial<HttpTurnosClientOp
 
 describe("HttpTurnosClient request shape", () => {
   it("POSTs JSON with the bearer token and validates the response", async () => {
-    const script = new ScriptedFetch([() => json([APPOINTMENT])]);
+    const script = new ScriptedFetch([() => jsonResponse([APPOINTMENT])]);
     const appointments = await makeClient(script).delDia("2026-01-20");
 
     expect(appointments).toEqual([APPOINTMENT]);
@@ -109,7 +72,7 @@ describe("HttpTurnosClient request shape", () => {
   });
 
   it("uses /today for the ART today and /day otherwise", async () => {
-    const script = new ScriptedFetch([() => json([]), () => json([])]);
+    const script = new ScriptedFetch([() => jsonResponse([]), () => jsonResponse([])]);
     const client = makeClient(script);
 
     await client.delDia(ART_TODAY);
@@ -125,10 +88,10 @@ describe("HttpTurnosClient request shape", () => {
 
   it("maps every read tool to its endpoint and body", async () => {
     const script = new ScriptedFetch([
-      () => json([APPOINTMENT]),
-      () => json([{ time: "08:00", available: true }]),
+      () => jsonResponse([APPOINTMENT]),
+      () => jsonResponse([{ time: "08:00", available: true }]),
       () =>
-        json([
+        jsonResponse([
           {
             slug: "servicio-softgel",
             name: "Servicio Soft Gel",
@@ -136,10 +99,10 @@ describe("HttpTurnosClient request shape", () => {
             durationMinutes: 120,
           },
         ]),
-      () => json([VERIFICATION]),
-      () => json({ count: 1, totalAmount: 5000, byReason: { admin_cancellation: 1 } }),
+      () => jsonResponse([VERIFICATION]),
+      () => jsonResponse({ count: 1, totalAmount: 5000, byReason: { admin_cancellation: 1 } }),
       () =>
-        json({
+        jsonResponse({
           date: "2026-01-20",
           totalAppointments: 1,
           counts: { confirmed: 1 },
@@ -182,7 +145,7 @@ describe("HttpTurnosClient request shape", () => {
   it("sends a write with motivo mapped to reason", async () => {
     const script = new ScriptedFetch([
       () =>
-        json({
+        jsonResponse({
           success: true,
           refunded: false,
           refundRequired: true,
@@ -200,7 +163,10 @@ describe("HttpTurnosClient request shape", () => {
 
 describe("HttpTurnosClient retry policy", () => {
   it("retries once on a 5xx and then succeeds", async () => {
-    const script = new ScriptedFetch([() => errorBody("boom", 500), () => json([APPOINTMENT])]);
+    const script = new ScriptedFetch([
+      () => errorBody("boom", 500),
+      () => jsonResponse([APPOINTMENT]),
+    ]);
 
     const appointments = await makeClient(script).delDia("2026-01-20");
 
@@ -213,7 +179,7 @@ describe("HttpTurnosClient retry policy", () => {
       () => {
         throw new TypeError("fetch failed");
       },
-      () => json([APPOINTMENT]),
+      () => jsonResponse([APPOINTMENT]),
     ]);
 
     await expect(makeClient(script).delDia("2026-01-20")).resolves.toHaveLength(1);
@@ -291,7 +257,7 @@ describe("HttpTurnosClient retry policy", () => {
 
 describe("HttpTurnosClient response validation", () => {
   it("rejects a schema mismatch with a typed error", async () => {
-    const script = new ScriptedFetch([() => json({ nope: true })]); // array expected
+    const script = new ScriptedFetch([() => jsonResponse({ nope: true })]); // array expected
 
     const error = await makeClient(script)
       .servicios()
@@ -308,7 +274,7 @@ describe("HttpTurnosClient response validation", () => {
   });
 
   it("times out after the configured budget and retries once", async () => {
-    const hanging: Handler = (_url, init) =>
+    const hanging: FetchHandler = (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
         init.signal?.addEventListener("abort", () =>
           reject(new DOMException("aborted", "AbortError")),
@@ -325,7 +291,7 @@ describe("HttpTurnosClient response validation", () => {
   });
 
   it("classifies a non-timeout abort as a network error", async () => {
-    const aborting: Handler = () => {
+    const aborting: FetchHandler = () => {
       throw new DOMException("aborted", "AbortError");
     };
     const script = new ScriptedFetch([aborting, aborting]);
@@ -342,7 +308,7 @@ describe("HttpTurnosClient response validation", () => {
 
 describe("HttpTurnosClient network errors", () => {
   it("wraps a permanent network failure as a typed error", async () => {
-    const failing: Handler = () => {
+    const failing: FetchHandler = () => {
       throw new TypeError("fetch failed");
     };
     const script = new ScriptedFetch([failing, failing]);
@@ -359,19 +325,19 @@ describe("HttpTurnosClient network errors", () => {
 describe("HttpTurnosClient writes", () => {
   it("maps every write to its endpoint and body", async () => {
     const script = new ScriptedFetch([
-      () => json({ success: true }),
-      () => json({ success: true, blockedSlotId: "blk_1" }),
-      () => json({ success: true }),
-      () => json({ success: true, appointmentId: "apt_new_1" }),
+      () => jsonResponse({ success: true }),
+      () => jsonResponse({ success: true, blockedSlotId: "blk_1" }),
+      () => jsonResponse({ success: true }),
+      () => jsonResponse({ success: true, appointmentId: "apt_new_1" }),
       () =>
-        json({
+        jsonResponse({
           success: true,
           appointmentId: "apt_1",
           date: "2026-01-20",
           timeSlot: "11:00",
         }),
-      () => json({ success: true }),
-      () => json({ success: true }),
+      () => jsonResponse({ success: true }),
+      () => jsonResponse({ success: true }),
     ]);
     const client = makeClient(script);
 

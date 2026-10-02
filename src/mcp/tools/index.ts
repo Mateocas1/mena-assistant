@@ -1,10 +1,10 @@
 import type { AppConfig } from "../../config.js";
 import { createTareasTools } from "../../adapters/tareas/index.js";
-import { createStockTools } from "../../adapters/stock/index.js";
+import { createStockTools } from "./stock.js";
 import { ToolRegistry } from "../registry.js";
 import { createTurnosTools } from "./turnos.js";
 
-export { createStockTools } from "../../adapters/stock/index.js";
+export { createStockTools } from "./stock.js";
 export { createTareasTools } from "../../adapters/tareas/index.js";
 export { createTurnosTools } from "./turnos.js";
 

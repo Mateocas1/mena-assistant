@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockTurnosBackend } from "../src/adapters/turnos/mock.js";
 import { createTurnosFixtures } from "../src/adapters/turnos/fixtures.js";
+import { MockStockBackend } from "../src/adapters/stock/mock.js";
 import { AuditLogger } from "../src/audit/index.js";
 import type { ChatAllowlist } from "../src/bot/allowlist.js";
 import {
@@ -130,6 +131,34 @@ describe("runDailySummary", () => {
     expect(entries).toContainEqual(
       expect.objectContaining({ event: "daily_summary", detail: "backend_unavailable" }),
     );
+  });
+
+  it("adds the stock alerts section when the flag is on", async () => {
+    const { deps } = makeDeps(fixedClock("2026-01-15T01:30:00Z"), {
+      features: { tareas: false, stock: true },
+      stock: new MockStockBackend(),
+    });
+
+    await runDailySummary(deps);
+
+    expect(deps.stock).toBeInstanceOf(MockStockBackend);
+  });
+
+  it("skips the stock section and audits it when the stock backend fails", async () => {
+    const stock = new MockStockBackend();
+    stock.alertas = async () => {
+      throw new Error("stock down");
+    };
+    const { deps, sends, lines } = makeDeps(fixedClock("2026-01-15T01:30:00Z"), {
+      features: { tareas: false, stock: true },
+      stock,
+    });
+
+    await runDailySummary(deps);
+
+    expect(sends).toHaveLength(2);
+    expect(sends[0]?.text).not.toContain("Insumos con alerta");
+    expect(lines.join("\n")).toContain("stock_unavailable");
   });
 
   it("audits a failed send without stopping the others", async () => {
