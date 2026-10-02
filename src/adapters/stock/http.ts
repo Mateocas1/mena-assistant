@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withSpan } from "../../telemetry/tracer.js";
 import {
   StockAuthError,
   StockConflictError,
@@ -211,6 +212,19 @@ export class HttpStockClient implements StockBackend {
   }
 
   private async attempt<T>(
+    method: "GET" | "POST",
+    path: string,
+    schema: z.ZodType<T>,
+    body?: Record<string, unknown>,
+  ): Promise<T> {
+    return await withSpan(
+      "http.request",
+      { backend: "stock", "http.request.method": method, "url.path": path },
+      () => this.attemptInner(method, path, schema, body),
+    );
+  }
+
+  private async attemptInner<T>(
     method: "GET" | "POST",
     path: string,
     schema: z.ZodType<T>,

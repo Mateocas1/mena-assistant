@@ -10,14 +10,15 @@ Romi (the salon owner) asks in a Telegram chat — "¿qué turnos tengo hoy?",
 and the assistant answers with real data and, for anything that mutates, returns
 a **proposal** she confirms with an inline **Confirmar / Cancelar** button.
 
-**Status: M3 (stock).** The `turnos.*` / `pagos.*`
+**Status: M4 (evals, traces, planner).** The `turnos.*` / `pagos.*`
 tools run against the real `mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP
 actions when `TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors
 the same contract shapes (`mock`, the dev/CI default). Every write is
 confirm-gated. An in-process scheduler sends the 08:00 ART daily summary and debounced backend
-health/stock alerts. With `FEATURE_STOCK` the assistant also reads mena-nails
-stock and closes the "completed appointment → service log" chain. `tareas.*`
-stays a disabled stub (M5).
+health/stock alerts. With `FEATURE_STOCK` the assistant reads mena-nails stock and
+closes the "completed appointment → service log" chain; with `FEATURE_TAREAS`
+Mateo's own planner is available to his chat only. OpenTelemetry spans are
+exported only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ## Architecture
 
@@ -77,7 +78,8 @@ src/
     turnos/mock.ts      fixture backend with the same semantics
     turnos/fixtures.ts  fixtures anchored on the clock's ART day
     stock/              mena-nails client, mock, fixtures, service mapping
-    tareas/             disabled stub behind FEATURE_TAREAS
+    tareas/             calendar model (copied), store, Firestore Admin adapter
+  telemetry/tracer.ts   OTLP spans (bot turn → LLM → tool → HTTP), PII redacted
   proposals/store.ts    proposal registry (expiry + single use + chat bound)
   audit/                JSONL audit, PII redaction, file sink
   metrics/usage.ts      queries per profile per ISO week
@@ -85,6 +87,9 @@ src/
   time/                 America/Argentina/Buenos_Aires + injectable clock
 evals/                  40-case dataset, scripted (CI) and live runners
 scripts/metrics.ts      pnpm metrics CLI
+evals/compare.ts        live model comparison + README table
+evals/prices.json       per-model price table ([VERIFY] where unknown)
+docs/case-study.md      portfolio write-up (results sections are TODO)
 e2e/stock-idempotency.ts  compose e2e: a retried service log never deducts twice
 tests/                  vitest suites
 Dockerfile              multi-stage, non-root, node dist/index.js
@@ -98,8 +103,8 @@ Requirements: Node 24 and pnpm 11.
 ```bash
 pnpm install
 cp .env.example .env      # fill in the values below
-pnpm test                 # 242 tests
-pnpm eval                 # 71/71 (scripted, deterministic)
+pnpm test                 # 285 tests
+pnpm eval                 # 87/87 (scripted, deterministic)
 pnpm dev                  # long polling with the mock backend
 ```
 
@@ -124,41 +129,45 @@ tools serve fixtures anchored on today's ART date. Point
 
 ## Environment variables
 
-| Variable                        | Default                       | Purpose                                                    |
-| ------------------------------- | ----------------------------- | ---------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN`            | — (required)                  | BotFather token.                                           |
-| `TELEGRAM_ALLOWLIST`            | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.           |
-| `LLM_BASE_URL`                  | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                |
-| `LLM_API_KEY`                   | — (required)                  | Provider key.                                              |
-| `LLM_MODEL`                     | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.**     |
-| `LLM_FALLBACK_MODEL`            | `glm5.3-flash`                | Retried when the primary call fails.                       |
-| `LLM_TIMEOUT_MS`                | `30000`                       | Per-call timeout.                                          |
-| `LLM_MAX_TOOL_CALLS`            | `6`                           | Hard cap of tool calls per conversation turn.              |
-| `TURNOS_BACKEND`                | `mock`                        | `mock` (fixtures) or `http` (real `/assistant/*`).         |
-| `ASSISTANT_API_BASE_URL`        | —                             | Convex `.convex.site` origin; required with `http`.        |
-| `ASSISTANT_TOKEN`               | —                             | Bearer token for `/assistant/*`; required with `http`.     |
-| `TURNOS_TIMEOUT_MS`             | `10000`                       | Per-request timeout for the booking backend.               |
-| `FEATURE_TURNOS`                | `true`                        | Registers `turnos.*`.                                      |
-| `FEATURE_STOCK`                 | `false`                       | Registers `stock.*` (stub until M3).                       |
-| `FEATURE_TAREAS`                | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).          |
-| `PROPOSAL_TTL_MINUTES`          | `10`                          | Proposal lifetime before the Confirm button dies.          |
-| `AUDIT_LOG_FILE`                | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`. |
-| `HEALTH_FILE`                   | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.      |
-| `HEALTH_INTERVAL_SECONDS`       | `30`                          | Heartbeat interval; three missed beats = unhealthy.        |
-| `DAILY_SUMMARY_ENABLED`         | `true`                        | Pushes the 08:00 ART summary to allow-listed chats.        |
-| `DAILY_SUMMARY_HOUR`            | `8`                           | Summary hour in ART (0–23).                                |
-| `HEALTH_ALERT_ENABLED`          | `false`                       | Polls the backend and alerts Mateo on an outage.           |
-| `HEALTH_ALERT_INTERVAL_SECONDS` | `300`                         | Health probe interval.                                     |
-| `HEALTH_ALERT_FAILURES`         | `3`                           | Consecutive failures before the single alert.              |
-| `HEALTH_ALERT_CHAT_ID`          | first `mateo` chat            | Where health alerts go.                                    |
-| `MCP_PROFILE`                   | `mateo`                       | Profile the standalone MCP server acts as.                 |
-| `STOCK_BACKEND`                 | `mock`                        | `mock` (fixtures) or `http` (mena-nails API).              |
-| `MENA_NAILS_API_URL`            | —                             | mena-nails API origin; required with `http`.               |
-| `MENA_NAILS_TOKEN`              | —                             | Service credential (`svc_...`); required with `http`.      |
-| `MENA_NAILS_TIMEOUT_MS`         | `10000`                       | Per-request timeout for the stock API.                     |
-| `STOCK_ALERT_ENABLED`           | `false`                       | Deduped push when a new item drops below threshold.        |
-| `STOCK_ALERT_INTERVAL_SECONDS`  | `1800`                        | Stock alert poll interval.                                 |
-| `STOCK_ALERT_CHAT_ID`           | first `romi` chat              | Where stock alerts go.                                     |
+| Variable                        | Default                       | Purpose                                                            |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| `TELEGRAM_BOT_TOKEN`            | — (required)                  | BotFather token.                                                   |
+| `TELEGRAM_ALLOWLIST`            | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.                   |
+| `LLM_BASE_URL`                  | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                        |
+| `LLM_API_KEY`                   | — (required)                  | Provider key.                                                      |
+| `LLM_MODEL`                     | `deepseek-v4-flash`           | Primary model. **Changing model = changing this var.**             |
+| `LLM_FALLBACK_MODEL`            | `glm5.3-flash`                | Retried when the primary call fails.                               |
+| `LLM_TIMEOUT_MS`                | `30000`                       | Per-call timeout.                                                  |
+| `LLM_MAX_TOOL_CALLS`            | `6`                           | Hard cap of tool calls per conversation turn.                      |
+| `TURNOS_BACKEND`                | `mock`                        | `mock` (fixtures) or `http` (real `/assistant/*`).                 |
+| `ASSISTANT_API_BASE_URL`        | —                             | Convex `.convex.site` origin; required with `http`.                |
+| `ASSISTANT_TOKEN`               | —                             | Bearer token for `/assistant/*`; required with `http`.             |
+| `TURNOS_TIMEOUT_MS`             | `10000`                       | Per-request timeout for the booking backend.                       |
+| `FEATURE_TURNOS`                | `true`                        | Registers `turnos.*`.                                              |
+| `FEATURE_STOCK`                 | `false`                       | Registers `stock.*` (stub until M3).                               |
+| `FEATURE_TAREAS`                | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).                  |
+| `PROPOSAL_TTL_MINUTES`          | `10`                          | Proposal lifetime before the Confirm button dies.                  |
+| `AUDIT_LOG_FILE`                | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`.         |
+| `HEALTH_FILE`                   | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.              |
+| `HEALTH_INTERVAL_SECONDS`       | `30`                          | Heartbeat interval; three missed beats = unhealthy.                |
+| `DAILY_SUMMARY_ENABLED`         | `true`                        | Pushes the 08:00 ART summary to allow-listed chats.                |
+| `DAILY_SUMMARY_HOUR`            | `8`                           | Summary hour in ART (0–23).                                        |
+| `HEALTH_ALERT_ENABLED`          | `false`                       | Polls the backend and alerts Mateo on an outage.                   |
+| `HEALTH_ALERT_INTERVAL_SECONDS` | `300`                         | Health probe interval.                                             |
+| `HEALTH_ALERT_FAILURES`         | `3`                           | Consecutive failures before the single alert.                      |
+| `HEALTH_ALERT_CHAT_ID`          | first `mateo` chat            | Where health alerts go.                                            |
+| `TAREAS_BACKEND`                | `mock`                        | `mock` or `firestore` (Mateo's planner).                           |
+| `MATEO_FIREBASE_UID`            | —                             | Required with `firestore`; the adapter only touches `users/{uid}`. |
+| `FIREBASE_PROJECT_ID`           | —                             | Optional Admin SDK project override.                               |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`   | — (off)                       | Enables OTLP trace export when set.                                |
+| `MCP_PROFILE`                   | `mateo`                       | Profile the standalone MCP server acts as.                         |
+| `STOCK_BACKEND`                 | `mock`                        | `mock` (fixtures) or `http` (mena-nails API).                      |
+| `MENA_NAILS_API_URL`            | —                             | mena-nails API origin; required with `http`.                       |
+| `MENA_NAILS_TOKEN`              | —                             | Service credential (`svc_...`); required with `http`.              |
+| `MENA_NAILS_TIMEOUT_MS`         | `10000`                       | Per-request timeout for the stock API.                             |
+| `STOCK_ALERT_ENABLED`           | `false`                       | Deduped push when a new item drops below threshold.                |
+| `STOCK_ALERT_INTERVAL_SECONDS`  | `1800`                        | Stock alert poll interval.                                         |
+| `STOCK_ALERT_CHAT_ID`           | first `romi` chat              | Where stock alerts go.                                             |
 
 Invalid configuration fails fast at startup with the offending variables named
 (`node dist/index.js --check` validates without starting the bot).
@@ -314,11 +323,13 @@ button, so its proposals expire unless confirmed from the bot.
 ## Evals
 
 ```bash
-pnpm eval        # 71 cases, scripted transport + mock backend, deterministic, in CI
+pnpm eval        # 87 cases, scripted transport + mock backend, deterministic, in CI
+pnpm eval:smoke  # the ~16 `smoke` cases only (path-filtered CI workflow)
+pnpm eval:compare --models a,b,c   # live model comparison (needs LLM_API_KEY; never in CI)
 pnpm eval:live   # same dataset against a real model (needs LLM_API_KEY; never in CI)
 ```
 
-Current result: **71/71 passed · tool accuracy 100.0% · args accuracy 100.0%**
+Current result: **87/87 passed · tool 100.0% · args 100.0% · hallucinated 0.0% · write proposals 100.0%**
 (scripted). The scripted transport is not a model-quality measurement: it pins
 tool selection and ART argument resolution so regressions fail in CI. Model
 comparison (`deepseek-v4-flash` vs `qwen3.8-flash` vs `glm5.3-flash` vs
@@ -372,6 +383,36 @@ image; they come from `env_file` on the VM.
 Rollback: `docker compose up -d assistant` with the previous image tag, or
 `TURNOS_BACKEND=mock` to fall back to fixtures without redeploying code.
 
+## Traces (optional)
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the process exports OpenTelemetry spans
+over OTLP HTTP: `bot.turn` → `llm.call` (one per model call) → `tool.call`, and
+from each HTTP adapter an `http.request` span with the backend and path. Span
+attributes go through the same redaction as the audit log, so a client phone or
+email never reaches the collector. Unset (the default) keeps the API's no-op
+tracer: nothing is recorded and the SDK is never loaded.
+
+## Mateo's planner (`tareas.*`)
+
+`FEATURE_TAREAS` registers four tools for **Mateo's chat only**: the permission
+profile hides them from Romi, a test asserts it, and every handler re-checks the
+profile.
+
+| Tool                                  | Kind                 | Notes                                            |
+| ------------------------------------- | -------------------- | ------------------------------------------------ |
+| `tareas.listar()`                     | read                 | open tasks with their deadlines                  |
+| `tareas.agenda(fecha?)`               | read                 | blocks + expanded series occurrences + tasks due |
+| `tareas.crear(titulo, fecha_limite?)` | **write → proposal** | validated with the calendar's own rules          |
+| `tareas.completar(occurrenceId)`      | **write → proposal** | one immutable completion per occurrence          |
+
+The domain validations are copied from `calendar/app/src/domain/model.ts` (with a
+source note; no cross-repo import) so the assistant writes exactly the shapes that
+app already accepts. The Firestore Admin adapter is structurally confined to
+`users/{MATEO_FIREBASE_UID}`: a single `documentPath()` builds every path.
+`TAREAS_BACKEND=mock` (the default) keeps the planner in memory for development
+and CI; `firestore` resolves the Admin SDK lazily on the first tool call, so the
+process starts without credentials.
+
 ## Security rules (non-negotiable)
 
 1. **Chat allowlist with per-chat permissions.** Unknown chats get no reply, no
@@ -424,9 +465,21 @@ Checked against <https://nan.builders/docs/models>:
   `LLM_API_KEY`), so real tool-calling behaviour, latency and cost are unmeasured.
   The four-way model comparison belongs to M4.
 
-## Next step (M4)
+## Model comparison
 
-Evals with real models (the comparison table: `deepseek-v4-flash` vs
-`glm5.3-flash` vs `qwen3.8-flash` vs `qwen3.6`), the full 50–100 case dataset
-and the case study. `turnos.sincronizar_precios` remains out of scope: mena-nails
-owns prices.
+The table below is regenerated by `pnpm eval:compare --models a,b,c` (needs
+`LLM_API_KEY`; never run in CI). It is empty until a live run happens.
+
+<!-- model-comparison:start -->
+
+_Sin datos todavía: corré `pnpm eval:compare`._
+
+<!-- model-comparison:end -->
+
+## Next step
+
+What M4 still needs from the human side: a live `pnpm eval:compare` run to fill
+the model table and pick the default/fallback with data, a few weeks of real use
+for the case-study metrics, and growing the dataset toward the PRD's 50–100 real
+cases. M5 (optional) is multimodal input: receipt photos and Romi's voice notes.
+`turnos.sincronizar_precios` remains out of scope: mena-nails owns prices.

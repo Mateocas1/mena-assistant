@@ -20,12 +20,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "tsx evals/run.ts",
+    "eval:smoke": "tsx evals/run-smoke.ts",
     "eval:live": "tsx evals/run-live.ts",
+    "eval:compare": "tsx evals/compare.ts",
     "e2e:stock": "tsx e2e/stock-idempotency.ts",
     "metrics": "tsx scripts/metrics.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
+    "firebase-admin": "^14.5.0",
     "grammy": "^1.46.0",
     "openai": "^7.25.0",
     "zod": "^4.6.5"

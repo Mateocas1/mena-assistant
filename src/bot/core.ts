@@ -1,4 +1,5 @@
 import type { StockBackend } from "../adapters/stock/client.js";
+import type { TareasBackend } from "../adapters/tareas/client.js";
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { AuditLogger, hashChatId } from "../audit/index.js";
 import type { AppConfig, ProfileName } from "../config.js";
@@ -11,6 +12,7 @@ import {
 } from "../llm/index.js";
 import { isWriteTool, type ToolHandlerContext, type ToolRegistry } from "../mcp/registry.js";
 import type { Proposal, ProposalStore } from "../proposals/store.js";
+import { withSpan } from "../telemetry/tracer.js";
 import { systemClock, type Clock } from "../time/index.js";
 import { resolveProfile, isToolAllowed } from "./allowlist.js";
 
@@ -25,6 +27,8 @@ export interface BotDeps {
   readonly backend: TurnosBackend;
   /** mena-nails stock backend; only wired when `FEATURE_STOCK` is on. */
   readonly stock?: StockBackend;
+  /** Calendar backend; only wired when `FEATURE_TAREAS` is on. */
+  readonly tareas?: TareasBackend;
   readonly proposals: ProposalStore;
   readonly transport: LlmTransport;
   readonly audit: AuditLogger;
@@ -75,6 +79,7 @@ function toolContext(deps: BotDeps, profile: ProfileName, chatId: string): ToolH
   return {
     backend: deps.backend,
     ...(deps.stock ? { stock: deps.stock } : {}),
+    ...(deps.tareas ? { tareas: deps.tareas } : {}),
     proposals: deps.proposals,
     clock: deps.clock ?? systemClock,
     profile,
@@ -106,20 +111,25 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
   const clock = deps.clock ?? systemClock;
 
   try {
-    const result = await runToolLoop({
-      transport: deps.transport,
-      tools,
-      context,
-      config: {
-        model: deps.config.llm.model,
-        fallbackModel: deps.config.llm.fallbackModel,
-        timeoutMs: deps.config.llm.timeoutMs,
-        maxToolCalls: deps.config.llm.maxToolCalls,
-      },
-      audit: deps.audit,
-      systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
-      userMessage: message.text,
-    });
+    const result = await withSpan(
+      "bot.turn",
+      { profile, chat: hashChatId(chatId), tools: tools.length },
+      () =>
+        runToolLoop({
+          transport: deps.transport,
+          tools,
+          context,
+          config: {
+            model: deps.config.llm.model,
+            fallbackModel: deps.config.llm.fallbackModel,
+            timeoutMs: deps.config.llm.timeoutMs,
+            maxToolCalls: deps.config.llm.maxToolCalls,
+          },
+          audit: deps.audit,
+          systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
+          userMessage: message.text,
+        }),
+    );
 
     deps.audit.log({
       event: "llm_turn",

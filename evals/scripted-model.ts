@@ -44,7 +44,7 @@ export function extractDate(question: string, clock: Clock): string | undefined 
 }
 
 const STOCK_PATTERN = /(stock|insumo|inventario)/;
-const STOCK_ALERT_PATTERN = /(alerta|umbral|por acabar|por debajo|bajando)/;
+const STOCK_ALERT_PATTERN = /(alerta|umbral|por acabar|por debajo|baj)/;
 const STOCK_LOG_PATTERN = /(servicios? registrados?|servicios? recientes?|ultimos servicios?)/;
 const STOCK_PRICE_PATTERN = /(historial de precios|precios de mena|precios de los servicios)/;
 const STOCK_CATALOG_PATTERN = /(catalogo|colores)/;
@@ -309,6 +309,9 @@ export function planToolCall(
   const text = normalize(question);
   const has = (name: string) => availableTools.includes(name);
   const fecha = extractDate(question, clock);
+
+  // Romi asking for something her profile cannot see: answer without any tool.
+  if (/tarea/.test(text) && !has("tareas.listar")) return null;
 
   const stock = planStockCall(text, question, has);
   if (stock) return stock;

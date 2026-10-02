@@ -1,4 +1,5 @@
 import { createStockBackend, createTurnosBackend } from "./adapters/index.js";
+import { createTareasBackend } from "./adapters/tareas/index.js";
 import { AuditLogger, createFileSink } from "./audit/index.js";
 import { createBot } from "./bot/index.js";
 import type { BotDeps } from "./bot/core.js";
@@ -10,6 +11,7 @@ import { ProposalStore } from "./proposals/store.js";
 import { startDailySummary } from "./schedule/daily-summary.js";
 import { createHealthMonitor, resolveHealthAlertChat } from "./schedule/health-monitor.js";
 import { createStockAlertMonitor } from "./schedule/stock-alerts.js";
+import { startTelemetry } from "./telemetry/tracer.js";
 import { systemClock, type Clock } from "./time/index.js";
 
 export interface CreateDepsOptions {
@@ -25,6 +27,7 @@ export function createBotDeps(config: AppConfig, options: CreateDepsOptions = {}
     registry: createToolRegistry(config.features),
     backend: createTurnosBackend(config, options.clock ? { clock: options.clock } : {}),
     ...(config.features.stock ? { stock: createStockBackend(config) } : {}),
+    ...(config.features.tareas ? { tareas: createTareasBackend(config) } : {}),
     proposals: new ProposalStore({
       ttlMs: config.proposalTtlMs,
       ...(options.clock ? { clock: options.clock } : {}),
@@ -65,7 +68,7 @@ async function main(): Promise<void> {
 
   if (mode === "check") {
     console.log(
-      `[mena-assistant] config ok — model=${config.llm.model} fallback=${config.llm.fallbackModel} turnos=${config.turnos.backend} chats=${Object.keys(config.telegram.allowlist).length}`,
+      `[mena-assistant] config ok — model=${config.llm.model} fallback=${config.llm.fallbackModel} turnos=${config.turnos.backend} stock=${config.features.stock ? config.stock.backend : "off"} tareas=${config.features.tareas ? config.tareas.backend : "off"} tracing=${config.telemetry.otlpEndpoint ? "otlp" : "off"} chats=${Object.keys(config.telegram.allowlist).length}`,
     );
     return;
   }
@@ -84,6 +87,7 @@ async function main(): Promise<void> {
 
   const deps = createBotDeps(config, { clock: systemClock });
   const bot = createBot(config.telegram.botToken, deps);
+  const stopTelemetry = startTelemetry({ endpoint: config.telemetry.otlpEndpoint });
   const stopLiveness = startLiveness({
     file: config.health.file,
     intervalMs: config.health.intervalMs,
@@ -145,6 +149,9 @@ async function main(): Promise<void> {
       : (): void => {};
 
   console.error(
+    `[mena-assistant] tracing=${config.telemetry.otlpEndpoint ? "otlp" : "off"} tareas=${config.features.tareas ? config.tareas.backend : "off"}`,
+  );
+  console.error(
     `[mena-assistant] stock=${config.features.stock ? config.stock.backend : "off"} stockAlerts=${config.features.stock && config.stock.alerts.enabled && stockAlertChat ? "on" : "off"}`,
   );
   console.error(
@@ -157,6 +164,7 @@ async function main(): Promise<void> {
     stopSummary();
     stopHealth();
     stopStockAlerts();
+    await stopTelemetry();
     await bot.stop();
   };
   process.once("SIGINT", () => void stop("SIGINT"));

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { withSpan } from "../../telemetry/tracer.js";
 import { artToday, systemClock, type Clock } from "../../time/index.js";
 import {
   TurnosAuthError,
@@ -313,6 +314,18 @@ export class HttpTurnosClient implements TurnosBackend {
   }
 
   private async attempt<T>(
+    path: string,
+    body: Record<string, unknown>,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
+    return await withSpan(
+      "http.request",
+      { backend: "turnos", "http.request.method": "POST", "url.path": path },
+      () => this.attemptInner(path, body, schema),
+    );
+  }
+
+  private async attemptInner<T>(
     path: string,
     body: Record<string, unknown>,
     schema: z.ZodType<T>,

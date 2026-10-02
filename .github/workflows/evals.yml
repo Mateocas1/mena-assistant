@@ -1,0 +1,57 @@
+name: Evals smoke
+
+# The fast scripted subset (~15 cases) runs whenever a prompt, a tool, the
+# registry or the dataset changes. The full scripted suite still runs in ci.yml.
+on:
+  push:
+    paths:
+      - "src/llm/prompt.ts"
+      - "src/mcp/**"
+      - "src/adapters/**"
+      - "evals/**"
+      - ".github/workflows/evals.yml"
+  pull_request:
+    paths:
+      - "src/llm/prompt.ts"
+      - "src/mcp/**"
+      - "src/adapters/**"
+      - "evals/**"
+      - ".github/workflows/evals.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: scripted smoke subset
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Evals smoke (scripted, mock backends)
+        run: pnpm eval:smoke
+
+      - name: Evals (full scripted suite)
+        run: pnpm eval

@@ -1,0 +1,35 @@
+{
+  "note": "USD per 1M tokens. Values marked [VERIFY] are unknown: confirm them in the NaN dashboard before publishing a cost table. The comparison runner prints 'n/d' for a model without prices instead of inventing one.",
+  "models": {
+    "deepseek-v4-flash": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    },
+    "qwen3.8-flash": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    },
+    "glm5.3-flash": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    },
+    "qwen3.6": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    },
+    "mimo-v2.6-flash": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    },
+    "gemma4": {
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "source": "[VERIFY] NaN pricing page not read"
+    }
+  }
+}

@@ -34,6 +34,16 @@ export interface AppConfig {
   readonly auditLogFile?: string;
   /** Heartbeat file and interval used by the offline container healthcheck. */
   readonly health: { readonly file: string; readonly intervalMs: number };
+  readonly telemetry: {
+    /** OTLP HTTP endpoint; unset means tracing stays off. */
+    readonly otlpEndpoint?: string;
+  };
+  readonly tareas: {
+    readonly backend: "mock" | "firestore";
+    /** Mateo's Firebase uid; the Firestore adapter is confined to `users/{uid}`. */
+    readonly firebaseUid?: string;
+    readonly projectId?: string;
+  };
   readonly stock: {
     readonly backend: "mock" | "http";
     /** mena-nails API origin; required when `backend` is `http`. */
@@ -132,6 +142,12 @@ const envSchema = z
     ASSISTANT_TOKEN: z.string().min(1).optional(),
     TURNOS_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+
+    TAREAS_BACKEND: z.enum(["mock", "firestore"]).default("mock"),
+    MATEO_FIREBASE_UID: z.string().min(1).optional(),
+    FIREBASE_PROJECT_ID: z.string().min(1).optional(),
+
     STOCK_BACKEND: z.enum(["mock", "http"]).default("mock"),
     MENA_NAILS_API_URL: z.string().url().optional(),
     MENA_NAILS_TOKEN: z.string().min(1).optional(),
@@ -157,6 +173,13 @@ const envSchema = z
     MCP_PROFILE: z.enum(PROFILE_NAMES).default("mateo"),
   })
   .superRefine((env, ctx) => {
+    if (env.TAREAS_BACKEND === "firestore" && !env.MATEO_FIREBASE_UID) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["MATEO_FIREBASE_UID"],
+        message: "MATEO_FIREBASE_UID is required when TAREAS_BACKEND=firestore",
+      });
+    }
     if (env.STOCK_BACKEND === "http") {
       if (!env.MENA_NAILS_API_URL) {
         ctx.addIssue({
@@ -237,6 +260,12 @@ export function parseConfig(env: EnvRecord): AppConfig {
     proposalTtlMs: value.PROPOSAL_TTL_MINUTES * 60_000,
     auditLogFile: value.AUDIT_LOG_FILE,
     health: { file: value.HEALTH_FILE, intervalMs: value.HEALTH_INTERVAL_SECONDS * 1000 },
+    telemetry: { otlpEndpoint: value.OTEL_EXPORTER_OTLP_ENDPOINT },
+    tareas: {
+      backend: value.TAREAS_BACKEND,
+      firebaseUid: value.MATEO_FIREBASE_UID,
+      projectId: value.FIREBASE_PROJECT_ID,
+    },
     stock: {
       backend: value.STOCK_BACKEND,
       apiBaseUrl: value.MENA_NAILS_API_URL,

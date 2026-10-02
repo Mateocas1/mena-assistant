@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { StockBackend } from "../adapters/stock/client.js";
+import type { TareasBackend } from "../adapters/tareas/client.js";
 import type { TurnosBackend } from "../adapters/turnos/client.js";
 import { isToolAllowed } from "../bot/allowlist.js";
 import type { ProfileName } from "../config.js";
@@ -11,6 +12,8 @@ export interface ToolHandlerContext {
   readonly backend: TurnosBackend;
   /** Present only when `FEATURE_STOCK` is on. */
   readonly stock?: StockBackend;
+  /** Present only when `FEATURE_TAREAS` is on (Mateo's chat). */
+  readonly tareas?: TareasBackend;
   readonly proposals: ProposalStore;
   readonly clock: Clock;
   readonly profile: ProfileName;

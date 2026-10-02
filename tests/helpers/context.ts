@@ -1,4 +1,7 @@
 import { MockStockBackend } from "../../src/adapters/stock/mock.js";
+import { createStoreTareasBackend } from "../../src/adapters/tareas/backend.js";
+import { MockTareasStore } from "../../src/adapters/tareas/store.js";
+import type { TareasBackend } from "../../src/adapters/tareas/client.js";
 import { MockTurnosBackend } from "../../src/adapters/turnos/mock.js";
 import { createTurnosFixtures } from "../../src/adapters/turnos/fixtures.js";
 import { ProposalStore } from "../../src/proposals/store.js";
@@ -87,5 +90,57 @@ export function makeStockTestContext(): StockTestContext {
     stock,
     proposals: base.proposals,
     context: { ...base.context, stock },
+  };
+}
+
+/** Seeds the planner exactly like Mateo's own calendar subtree would look. */
+export function seededTareasStore(): MockTareasStore {
+  return new MockTareasStore({
+    tasks: [
+      { id: "task_alquiler", data: { title: "Pagar el alquiler", deadline: "2026-01-15" } },
+      { id: "task_dni", data: { title: "Renovar el DNI", deadline: "2026-01-13" } },
+      { id: "task_filtros", data: { title: "Comprar filtros" } },
+    ],
+    series: [
+      { id: "serie_gym", data: { title: "Gym", frequency: "weekly", anchorDate: "2026-01-07" } },
+      {
+        id: "serie_agua",
+        data: { title: "Tomar agua", frequency: "daily", anchorDate: "2026-01-01" },
+      },
+    ],
+    completions: [
+      {
+        id: "serie_gym:2026-01-07",
+        data: { occurrenceId: "serie_gym:2026-01-07", completedAt: "2026-01-07T13:00:00Z" },
+      },
+    ],
+    blocks: [
+      {
+        id: "blk_manana",
+        data: {
+          start: "2026-01-14T13:00:00Z",
+          end: "2026-01-14T15:00:00Z",
+          taskId: "task_filtros",
+        },
+      },
+      { id: "blk_otro_dia", data: { start: "2026-01-20T13:00:00Z", end: "2026-01-20T14:00:00Z" } },
+    ],
+  });
+}
+
+export interface TareasTestContext {
+  readonly context: ToolHandlerContext;
+  readonly tareas: TareasBackend;
+  readonly proposals: ProposalStore;
+}
+
+/** Turnos + stock + tareas context on the fixed ART clock. */
+export function makeTareasTestContext(profile: "mateo" | "romi" = "mateo"): TareasTestContext {
+  const base = makeTestContext({ profile });
+  const tareas = createStoreTareasBackend(seededTareasStore(), { clock: fixedClock(TEST_INSTANT) });
+  return {
+    tareas,
+    proposals: base.proposals,
+    context: { ...base.context, profile, tareas },
   };
 }

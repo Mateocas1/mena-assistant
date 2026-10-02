@@ -6,6 +6,7 @@ import {
   type ToolHandlerContext,
 } from "../mcp/registry.js";
 import type { Proposal } from "../proposals/store.js";
+import { withSpan } from "../telemetry/tracer.js";
 import {
   LlmError,
   type LlmCompletion,
@@ -140,18 +141,32 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
   async function complete(messages_: readonly LlmMessage[]): Promise<LlmCompletion> {
     try {
-      return await transport.complete(
-        { model: config.model, messages: messages_, tools: toolSpecs },
-        { timeoutMs: config.timeoutMs },
+      return await withSpan(
+        "llm.call",
+        { "gen_ai.request.model": config.model, "llm.messages": messages_.length },
+        () =>
+          transport.complete(
+            { model: config.model, messages: messages_, tools: toolSpecs },
+            { timeoutMs: config.timeoutMs },
+          ),
       );
     } catch (primaryError) {
       if (!config.fallbackModel || config.fallbackModel === config.model) {
         throw new LlmError(`Model ${config.model} failed`, { cause: primaryError });
       }
       try {
-        const completion = await transport.complete(
-          { model: config.fallbackModel, messages: messages_, tools: toolSpecs },
-          { timeoutMs: config.timeoutMs },
+        const completion = await withSpan(
+          "llm.call",
+          {
+            "gen_ai.request.model": config.fallbackModel,
+            "llm.messages": messages_.length,
+            fallback: true,
+          },
+          () =>
+            transport.complete(
+              { model: config.fallbackModel, messages: messages_, tools: toolSpecs },
+              { timeoutMs: config.timeoutMs },
+            ),
         );
         usedFallback = true;
         usedModel = config.fallbackModel;
@@ -290,7 +305,11 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
       const started = Date.now();
       try {
-        const result = await tool.execute(parsedArgs.value, context);
+        const result = await withSpan(
+          "tool.call",
+          { tool: call.name, args: asArgsRecord(parsedArgs.value) },
+          () => tool.execute(parsedArgs.value, context),
+        );
         const latencyMs = Date.now() - started;
 
         if (result.proposal) proposals.push(result.proposal);
