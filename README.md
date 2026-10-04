@@ -261,13 +261,13 @@ stock. It tears the stack down afterwards (`--keep` leaves it running). Paths
 and port: `MENA_NAILS_PATH` (default `../mena-nails`) and `M3E2E_API_PORT`
 (default `8080`, matching mena-nails' compose).
 
-### Known backend gap
+### Catalog reads over the service credential
 
-`GET /catalog/items` is owner-only in mena-nails (`serviceRouteAllowed` allows
-only `GET /stock`, `GET|POST /services` and `GET /services/prices`), so a service
-credential gets 403 there. `stock.catalogo` reports that clearly and the chain
-still proposes from the item id; adding `/catalog/items` to the service allowlist
-is a one-line change in `apps/api/internal/server/access.go`.
+mena-nails PR #158 added `GET /catalog/items` to the service-credential
+allowlist (`serviceRouteAllowed` in `apps/api/internal/server/access.go`), so
+`stock.catalogo` now returns item ids, labels and quantity models with the
+assistant's `MENA_NAILS_TOKEN` instead of answering `403`. Catalog _changes_
+stay owner-only: the credential is read-only there.
 
 ## Daily summary (08:00 ART)
 
