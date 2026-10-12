@@ -1,7 +1,7 @@
 import { createStockBackend, createTurnosBackend } from "./adapters/index.js";
 import { createTareasBackend } from "./adapters/tareas/index.js";
 import { AuditLogger, createFileSink } from "./audit/index.js";
-import { createBot } from "./bot/index.js";
+import { createBot, redactSecrets } from "./bot/index.js";
 import type { BotDeps } from "./bot/core.js";
 import { ConversationMemory } from "./bot/memory.js";
 import { ConfigError, parseConfig, type AppConfig } from "./config.js";
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   console.error(
-    `[mena-assistant] fatal: ${error instanceof Error ? error.message : String(error)}`,
+    `[mena-assistant] fatal: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
   );
   process.exitCode = 1;
 });

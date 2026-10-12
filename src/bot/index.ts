@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, type BotError, type Context } from "grammy";
 import { resolveProfile } from "./allowlist.js";
 import { handleCallback, handleMessage, type BotDeps, type CallbackAction } from "./core.js";
 import { keepTyping } from "./typing.js";
@@ -28,6 +28,33 @@ export function parseCallbackData(data: string): ParsedCallbackData | undefined 
   return undefined;
 }
 
+/** Telegram bot tokens travel inside API urls; never let one reach a log line. */
+export function redactSecrets(text: string): string {
+  return text.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot<redacted>");
+}
+
+/** One retry for a Telegram send: a single network blip must not lose a reply. */
+export async function sendWithRetry<T>(send: () => Promise<T>, delayMs = 1_000): Promise<T> {
+  try {
+    return await send();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return await send();
+  }
+}
+
+/**
+ * Without a handler grammy stops long polling on the first failed update, so
+ * one Telegram timeout took the whole bot down. The update is logged without
+ * the token and the bot keeps serving.
+ */
+function logBotError(error: BotError<Context>): void {
+  const detail = error.error instanceof Error ? error.error.message : String(error.error);
+  console.error(
+    `[mena-assistant] update ${error.ctx.update.update_id} failed: ${redactSecrets(detail)}`,
+  );
+}
+
 export function proposalKeyboard(proposalId: string): InlineKeyboard {
   return new InlineKeyboard()
     .text("✅ Confirmar", `${CONFIRM_PREFIX}${proposalId}`)
@@ -45,6 +72,7 @@ export function proposalMessage(summary: string, diff: string): string {
  */
 export function createBot(token: string, deps: BotDeps): Bot {
   const bot = new Bot(token);
+  bot.catch(logBotError);
 
   bot.on("message:text", async (ctx) => {
     // Typing only for allow-listed chats: a stranger must not see any sign of life.
@@ -59,11 +87,13 @@ export function createBot(token: string, deps: BotDeps): Bot {
     }
     if (reply.kind === "ignored") return;
 
-    await ctx.reply(reply.text);
+    await sendWithRetry(() => ctx.reply(reply.text));
     for (const proposal of reply.proposals) {
-      await ctx.reply(proposalMessage(proposal.summary, proposal.diff), {
-        reply_markup: proposalKeyboard(proposal.id),
-      });
+      await sendWithRetry(() =>
+        ctx.reply(proposalMessage(proposal.summary, proposal.diff), {
+          reply_markup: proposalKeyboard(proposal.id),
+        }),
+      );
     }
   });
 
@@ -89,7 +119,7 @@ export function createBot(token: string, deps: BotDeps): Bot {
       await ctx.editMessageText(text);
     } catch {
       // The message may be too old to edit; a new message is the correct fallback.
-      await ctx.reply(text);
+      await sendWithRetry(() => ctx.reply(text));
     }
   });
 
