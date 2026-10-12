@@ -18,7 +18,9 @@ import {
   FECHA_DESCRIPTION,
   artDateHint,
   assertBookableDate,
+  appointmentLabel,
   describeAppointment,
+  humanDay,
   findAppointment,
   findRecentAppointment,
   resolveDateOrArgumentError,
@@ -129,13 +131,15 @@ export function createTurnosWriteTools(): ToolDefinition[] {
         const appointment =
           (await findAppointment(context, args.fecha, args.appointmentId)) ??
           (await findRecentAppointment(context, args.appointmentId));
-        const summary = `Marcar como completado el turno ${args.appointmentId}${
-          appointment ? ` — ${describeAppointment(appointment)}` : ""
-        }`;
-        const before = appointment ? describeAppointment(appointment) : args.appointmentId;
+        const summary = appointment
+          ? `Marcar como completado el turno de ${appointmentLabel(appointment, context.clock)}`
+          : `Marcar como completado el turno ${args.appointmentId}`;
+        const before = appointment
+          ? describeAppointment(appointment, context.clock)
+          : args.appointmentId;
         const after = appointment
-          ? describeAppointment(appointment, "completed")
-          : `${args.appointmentId} · completed`;
+          ? describeAppointment(appointment, context.clock, "completed")
+          : `${args.appointmentId} · completado`;
 
         return propose(
           "turnos.marcar_completado",
@@ -196,13 +200,15 @@ export function createTurnosWriteTools(): ToolDefinition[] {
       }),
       async propose(args, context) {
         const appointment = await findAppointment(context, args.fecha, args.appointmentId);
-        const summary = `Cancelar el turno ${args.appointmentId}${
-          appointment ? ` — ${describeAppointment(appointment)}` : ""
-        }${args.motivo ? ` (motivo: ${args.motivo})` : ""}`;
-        const before = appointment ? describeAppointment(appointment) : args.appointmentId;
+        const summary = `Cancelar el turno ${
+          appointment ? `de ${appointmentLabel(appointment, context.clock)}` : args.appointmentId
+        }${args.motivo ? ` — motivo: ${args.motivo}` : ""}`;
+        const before = appointment
+          ? describeAppointment(appointment, context.clock)
+          : args.appointmentId;
         const after = appointment
-          ? describeAppointment(appointment, "cancelled")
-          : `${args.appointmentId} · cancelled`;
+          ? describeAppointment(appointment, context.clock, "cancelled")
+          : `${args.appointmentId} · cancelado`;
 
         return propose(
           "turnos.cancelar",
@@ -412,16 +418,16 @@ export function createTurnosWriteTools(): ToolDefinition[] {
         assertBookableDate("turnos.reprogramar", fecha, context.clock);
 
         const current = await findAppointment(context, args.fecha_actual, args.appointmentId);
-        const from = current ? `${current.date} ${current.timeSlot}` : "su horario actual";
-        const summary = `Reprogramar el turno ${args.appointmentId} de ${from} a ${fecha} ${args.hora}${
-          current ? ` (${current.serviceName} · ${current.clientName ?? "sin nombre"})` : ""
-        }`;
+        const to = `${humanDay(fecha, context.clock)} ${args.hora}`;
+        const summary = current
+          ? `Reprogramar el turno de ${appointmentLabel(current, context.clock)} para ${to}`
+          : `Reprogramar el turno ${args.appointmentId} para ${to}`;
         const before = current
-          ? describeAppointment(current)
+          ? describeAppointment(current, context.clock)
           : `${args.appointmentId} · horario actual`;
         const after = current
-          ? `${fecha} ${args.hora} · ${current.serviceName} · ${current.clientName ?? "sin nombre"} · ${current.status}`
-          : `${args.appointmentId} → ${fecha} ${args.hora}`;
+          ? describeAppointment({ ...current, date: fecha, timeSlot: args.hora }, context.clock)
+          : `${args.appointmentId} → ${to}`;
 
         return propose(
           "turnos.reprogramar",

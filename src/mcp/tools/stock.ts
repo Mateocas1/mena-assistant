@@ -19,6 +19,7 @@ import {
   type ToolResult,
 } from "../registry.js";
 import { translateStockError } from "./stock-errors.js";
+import { findRecentAppointment, humanDay } from "./turnos-shared.js";
 
 export const STOCK_DISABLED_USER_MESSAGE =
   "El módulo de stock está desactivado en este asistente. Avisá a Mateo.";
@@ -96,7 +97,7 @@ async function describeColor(
     const color = catalog.find((item: CatalogItem) => item.id === colorItemId);
     if (!color)
       return {
-        label: `item ${colorItemId}`,
+        label: "el color elegido",
         warning: `el catálogo no tiene el item ${colorItemId}`,
       };
     if (!color.isColor)
@@ -108,11 +109,11 @@ async function describeColor(
   } catch {
     // Catalog reads may be forbidden for a service credential; the backend
     // validates the colour anyway, so the proposal is built from the id.
-    return { label: `item ${colorItemId}` };
+    return { label: "el color elegido" };
   }
 }
 
-/** Catalog labels for each tip allocation; the item id stands in when the catalog cannot be read. */
+/** Catalog labels for each tip allocation; a plain "tips" stands in when the catalog cannot be read. */
 async function describeTips(
   stock: StockBackend,
   tips: readonly { itemId: number; units: number }[],
@@ -125,8 +126,37 @@ async function describeTips(
   }
   return tips.map((tip) => ({
     ...tip,
-    label: catalog.find((item) => item.id === tip.itemId)?.displayLabel ?? `item ${tip.itemId}`,
+    label: catalog.find((item) => item.id === tip.itemId)?.displayLabel ?? "tips",
   }));
+}
+
+const SERVICE_NAMES: Readonly<Record<StockServiceKey, string>> = {
+  soft_gel: "Soft Gel",
+  capping: "Capping",
+  semipermanente: "Semipermanente",
+};
+
+/** "de Ana G. (hoy 08:00)" for the appointment, or nothing when it cannot be found. */
+async function describeAppointmentFor(
+  context: ToolHandlerContext,
+  appointmentId: string | undefined,
+): Promise<string> {
+  if (!appointmentId) return "";
+  const appointment = await findRecentAppointment(context, appointmentId);
+  if (!appointment) return "";
+  const who = appointment.clientName ? ` de ${appointment.clientName}` : "";
+  return `${who} (${humanDay(appointment.date, context.clock)} ${appointment.timeSlot})`;
+}
+
+/** What the model needs from a catalog item, and nothing else: fewer prompt tokens. */
+function compactCatalogItem(item: CatalogItem): Record<string, unknown> {
+  return {
+    id: item.id,
+    nombre: item.displayLabel,
+    ...(item.isColor ? { color: true } : {}),
+    ...(item.tipShape ? { forma: item.tipShape } : {}),
+    ...(item.tipSize !== null ? { talle: item.tipSize } : {}),
+  };
 }
 
 /**
@@ -214,7 +244,7 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
       async handler(args, context) {
         const catalog = await requireStock(context).catalogo();
         const items = args.solo_colores ? catalog.filter((item) => item.isColor) : catalog;
-        return { content: JSON.stringify({ items }), data: items };
+        return { content: JSON.stringify({ items: items.map(compactCatalogItem) }), data: items };
       },
     }),
 
@@ -262,18 +292,13 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
 
         const { label, warning } = await describeColor(stock, args.colorItemId);
         const tips = await describeTips(stock, args.tips ?? []);
-        const tipTotal = tips.reduce((sum, tip) => sum + tip.units, 0);
-        const tipSummary =
-          tipTotal > 0
-            ? ` · ${tipTotal} tips (${tips.map((tip) => `${tip.units} ${tip.label}`).join(", ")})`
-            : "";
-        const appointment = args.sourceAppointmentId ? ` · turno ${args.sourceAppointmentId}` : "";
+        const appointment = await describeAppointmentFor(context, args.sourceAppointmentId);
 
-        const summary = `Registrar ${args.servicio} — color ${label}${tipSummary}${appointment}`;
+        const summary = `Registrar el ${SERVICE_NAMES[args.servicio]}${appointment}`;
         const diff = [
-          `- color ${label} (item ${args.colorItemId}): disponible`,
-          `+ color ${label} (item ${args.colorItemId}): descontado 1`,
-          ...tips.map((tip) => `+ ${tip.label} (item ${tip.itemId}): descontado ${tip.units}`),
+          "Se descuenta:",
+          `• ${label}`,
+          ...tips.map((tip) => `• ${tip.units} ${tip.label}`),
         ].join("\n");
 
         const proposal = context.proposals.create({

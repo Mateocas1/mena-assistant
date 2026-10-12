@@ -5,6 +5,7 @@ import {
   artToday,
   artTomorrow,
   artWeekRange,
+  artYesterday,
   InvalidDateError,
   InvalidRangeError,
   resolveArtDate,
@@ -111,9 +112,41 @@ export async function findRecentAppointment(
   }
 }
 
-export function describeAppointment(appointment: Appointment, status = appointment.status): string {
+const STATUS_NAMES: Readonly<Record<string, string>> = {
+  pending: "pendiente",
+  paid: "seña pagada",
+  confirmed: "confirmado",
+  completed: "completado",
+  cancelled: "cancelado",
+  no_show: "no vino",
+};
+
+/** Spanish name of an appointment status; unknown statuses pass through. */
+export function statusName(status: string): string {
+  return STATUS_NAMES[status] ?? status;
+}
+
+/** "hoy", "ayer", "mañana" or "07/01": how Romi names a day. */
+export function humanDay(date: string, clock: Clock): string {
+  if (date === artToday(clock)) return "hoy";
+  if (date === artYesterday(clock)) return "ayer";
+  if (date === artTomorrow(clock)) return "mañana";
+  return `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+}
+
+/** "Ana G. (Servicio Soft Gel, hoy 08:00)": the appointment as Romi would say it, no id. */
+export function appointmentLabel(appointment: Appointment, clock: Clock): string {
   const who = appointment.clientName ?? "sin nombre";
-  return `${appointment.date} ${appointment.timeSlot} · ${appointment.serviceName} · ${who} · ${status}`;
+  return `${who} (${appointment.serviceName}, ${humanDay(appointment.date, clock)} ${appointment.timeSlot})`;
+}
+
+export function describeAppointment(
+  appointment: Appointment,
+  clock: Clock,
+  status = appointment.status,
+): string {
+  const who = appointment.clientName ?? "sin nombre";
+  return `${humanDay(appointment.date, clock)} ${appointment.timeSlot} · ${appointment.serviceName} · ${who} · ${statusName(status)}`;
 }
 
 export function slotField(description: string): z.ZodString {

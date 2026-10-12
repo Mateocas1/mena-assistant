@@ -40,8 +40,10 @@ describe("write tools only create proposals", () => {
     );
 
     expect(result.proposal?.tool).toBe("turnos.marcar_completado");
-    expect(result.proposal?.summary).toContain("Paula V.");
-    expect(result.proposal?.diff).toContain("completed");
+    expect(result.proposal?.summary).toBe(
+      "Marcar como completado el turno de Paula V. (Servicio Soft Gel, 07/01 08:00)",
+    );
+    expect(result.proposal?.diff).toContain("· completado");
     expect(proposals.get(result.proposal!.id)?.status).toBe("pending");
     expect((await backend.delDia("2026-01-07"))[0]?.status).toBe("confirmed");
 
@@ -149,9 +151,12 @@ describe("write tools only create proposals", () => {
       context,
     );
 
-    expect(result.proposal?.summary).toContain("de 2026-01-14 08:00 a 2026-01-20 11:00");
-    expect(result.proposal?.diff).toContain("- 2026-01-14 08:00");
-    expect(result.proposal?.diff).toContain("+ 2026-01-20 11:00");
+    expect(result.proposal?.summary).toBe(
+      "Reprogramar el turno de Ana G. (Servicio Soft Gel, hoy 08:00) para 20/01 11:00",
+    );
+    expect(result.proposal?.diff).toContain("- hoy 08:00");
+    expect(result.proposal?.diff).toContain("+ 20/01 11:00");
+    expect(`${result.proposal?.summary}${result.proposal?.diff}`).not.toContain("apt_");
 
     await reprogramar.executeProposal(result.proposal!.args, context);
     expect((await backend.delDia(TEST_ART_DATE)).map((a) => a.id)).not.toContain("apt_today_0800");

@@ -88,8 +88,8 @@ describe("buildDailySummary", () => {
   it("lists the day, the payments and the refunds for Romi", () => {
     const text = buildDailySummary("romi", data, { tareasEnabled: false });
     expect(text).toContain(`resumen del ${ART_TODAY}`);
-    expect(text).toContain("Turnos: 1 (1 confirmed) · Seña facturada: $12500");
-    expect(text).toContain("- 08:00 · Servicio Soft Gel · Ana G. (confirmed)");
+    expect(text).toContain("Turnos: 1 (1 confirmado) · Seña facturada: $12500");
+    expect(text).toContain("- 08:00 · Servicio Soft Gel · Ana G. (confirmado)");
     expect(text).toContain("Pagos por revisar: 1");
     expect(text).toContain("Reintegros pendientes: 1 · $5000");
     expect(text).not.toContain("Tareas");

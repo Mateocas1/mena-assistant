@@ -1,3 +1,4 @@
+import { statusName } from "../mcp/tools/turnos-shared.js";
 import { hashChatId, type AuditLogger } from "../audit/index.js";
 import type { StockBackend, StockEntry } from "../adapters/stock/client.js";
 import type { Appointment, PendingPayments } from "../adapters/turnos/client.js";
@@ -49,12 +50,12 @@ export function msUntilNextRun(clock: Clock, hour: number = DEFAULT_SUMMARY_HOUR
 function describeCounts(counts: Readonly<Record<string, number>>): string {
   const entries = Object.entries(counts);
   if (entries.length === 0) return "sin turnos";
-  return entries.map(([status, count]) => `${count} ${status}`).join(", ");
+  return entries.map(([status, count]) => `${count} ${statusName(status)}`).join(", ");
 }
 
 function describeAppointment(appointment: Appointment): string {
   const who = appointment.clientName ?? "sin nombre";
-  return `- ${appointment.timeSlot} · ${appointment.serviceName} · ${who} (${appointment.status})`;
+  return `- ${appointment.timeSlot} · ${appointment.serviceName} · ${who} (${statusName(appointment.status)})`;
 }
 
 /**

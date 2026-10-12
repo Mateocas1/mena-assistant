@@ -86,10 +86,8 @@ describe("stock.registrar_servicio", () => {
     );
 
     expect(result.proposal?.tool).toBe("stock.registrar_servicio");
-    expect(result.proposal?.summary).toContain("City 22");
-    expect(result.proposal?.summary).toContain("10 tips");
-    expect(result.proposal?.summary).toContain("apt_today_0800");
-    expect(result.proposal?.diff).toContain("descontado");
+    expect(result.proposal?.summary).toBe("Registrar el Soft Gel de Ana G. (hoy 08:00)");
+    expect(result.proposal?.diff).toBe("Se descuenta:\n• City 22\n• 10 Tips almond 5");
     expect((await stock.actual()).find((entry) => entry.itemId === 1)?.units).toBe(6);
   });
 
@@ -107,11 +105,43 @@ describe("stock.registrar_servicio", () => {
       context,
     );
 
-    expect(result.proposal?.summary).toContain("10 tips (4 Tips almond 5, 6 Tips almond 6)");
-    expect(result.proposal?.diff).toContain("+ Tips almond 5 (item 10): descontado 4");
-    expect(result.proposal?.diff).toContain("+ Tips almond 6 (item 11): descontado 6");
+    expect(result.proposal?.summary).toBe("Registrar el Soft Gel");
+    expect(result.proposal?.diff).toBe(
+      "Se descuenta:\n• City 22\n• 4 Tips almond 5\n• 6 Tips almond 6",
+    );
     expect((await stock.actual()).find((entry) => entry.itemId === 10)?.units).toBe(100);
     expect((await stock.actual()).find((entry) => entry.itemId === 11)?.units).toBe(15);
+  });
+
+  it("never shows Romi an id or an internal service key", async () => {
+    const { context } = makeStockTestContext();
+    const result = await registrar.execute(
+      {
+        servicio: "soft_gel",
+        colorItemId: 1,
+        tips: [{ itemId: 10, units: 10 }],
+        sourceAppointmentId: "apt_past_0800",
+      },
+      context,
+    );
+    const visible = `${result.proposal?.summary}\n${result.proposal?.diff}`;
+
+    expect(visible).toContain("Paula V.");
+    expect(visible).not.toMatch(/apt_|soft_gel|item \d|\(id/);
+  });
+
+  it("returns a compact catalog to the model", async () => {
+    const { context } = makeStockTestContext();
+    const result = await catalogo.execute({}, context);
+    const items = (JSON.parse(result.content) as { items: Record<string, unknown>[] }).items;
+
+    expect(items.find((item) => item.id === 10)).toEqual({
+      id: 10,
+      nombre: "Tips almond 5",
+      forma: "almond",
+      talle: 5,
+    });
+    expect(items.find((item) => item.id === 1)).toEqual({ id: 1, nombre: "City 22", color: true });
   });
 
   it("tells the model that one service can mix tip sizes", () => {
@@ -194,7 +224,8 @@ describe("stock.registrar_servicio", () => {
     const context: ToolHandlerContext = { ...base.context, stock: forbiddenCatalog };
 
     const result = await registrar.execute({ servicio: "capping", colorItemId: 1 }, context);
-    expect(result.proposal?.summary).toContain("item 1");
+    expect(result.proposal?.summary).toBe("Registrar el Capping");
+    expect(result.proposal?.diff).toBe("Se descuenta:\n• el color elegido");
   });
 });
 

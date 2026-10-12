@@ -169,8 +169,10 @@ describe("turnos.cancelar (write tool)", () => {
     expect(result.proposal).toBeDefined();
     expect(result.proposal?.chatId).toBe(TEST_CHAT_ID);
     expect(result.proposal?.tool).toBe("turnos.cancelar");
-    expect(result.proposal?.summary).toContain("Ana G.");
-    expect(result.proposal?.diff).toContain("cancelled");
+    expect(result.proposal?.summary).toBe(
+      "Cancelar el turno de Ana G. (Servicio Soft Gel, hoy 08:00) — motivo: viaje",
+    );
+    expect(result.proposal?.diff).toContain("· cancelado");
     expect(proposals.get(result.proposal!.id)?.status).toBe("pending");
 
     const payload = JSON.parse(result.content) as {
