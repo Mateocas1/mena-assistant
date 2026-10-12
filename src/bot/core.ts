@@ -10,7 +10,13 @@ import {
   userMessageOf,
   type LlmTransport,
 } from "../llm/index.js";
-import { isWriteTool, type ToolHandlerContext, type ToolRegistry } from "../mcp/registry.js";
+import {
+  isWriteTool,
+  type ToolDefinition,
+  type ToolHandlerContext,
+  type ToolRegistry,
+} from "../mcp/registry.js";
+import type { LlmMessage } from "../llm/types.js";
 import type { Proposal, ProposalStore } from "../proposals/store.js";
 import { withSpan } from "../telemetry/tracer.js";
 import { systemClock, type Clock } from "../time/index.js";
@@ -100,6 +106,86 @@ function toolContext(deps: BotDeps, profile: ProfileName, chatId: string): ToolH
   };
 }
 
+/** Reads nearly every message needs; running them up front saves a model round trip. */
+const PRELOADED_READS: readonly {
+  readonly tool: string;
+  readonly args: Record<string, unknown>;
+}[] = [
+  { tool: "turnos.del_dia", args: { fecha: "hoy" } },
+  { tool: "stock.catalogo", args: {} },
+];
+const PRELOADED_TOOLS = new Set(PRELOADED_READS.map((read) => read.tool));
+
+/**
+ * Runs the preloaded reads the profile may call and shapes them as one
+ * assistant tool-call message plus its results, exactly as if the model had
+ * asked. A failed read is left out; the model can still call it.
+ */
+async function preloadReads(
+  tools: readonly ToolDefinition[],
+  context: ToolHandlerContext,
+  audit: AuditLogger,
+): Promise<LlmMessage[]> {
+  const done: { id: string; tool: string; args: Record<string, unknown>; content: string }[] = [];
+  for (const [index, read] of PRELOADED_READS.entries()) {
+    const tool = tools.find((candidate) => candidate.name === read.tool);
+    if (!tool || tool.kind !== "read") continue;
+    const started = Date.now();
+    const entry = {
+      event: "tool_call" as const,
+      profile: context.profile,
+      chatIdHash: hashChatId(context.chatId),
+      tool: read.tool,
+      args: read.args,
+      detail: "preload",
+    };
+    try {
+      const result = await tool.execute(read.args, context);
+      done.push({ id: `preload_${index + 1}`, ...read, content: result.content });
+      audit.log({ ...entry, status: "ok", latencyMs: Date.now() - started });
+    } catch (error) {
+      // Same as a failed tool call: the model reads it again if it needs it.
+      audit.log({
+        ...entry,
+        status: "error",
+        latencyMs: Date.now() - started,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (done.length === 0) return [];
+  return [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: done.map((read) => ({
+        id: read.id,
+        name: read.tool,
+        arguments: JSON.stringify(read.args),
+      })),
+    },
+    ...done.map((read) => ({ role: "tool" as const, toolCallId: read.id, content: read.content })),
+  ];
+}
+
+/** The turn's reads minus the preloaded ones, which every message gets fresh anyway. */
+function withoutPreloaded(trace: readonly LlmMessage[]): LlmMessage[] {
+  const dropped = new Set<string>();
+  const kept: LlmMessage[] = [];
+  for (const message of trace) {
+    if (message.role === "assistant" && message.toolCalls) {
+      const calls = message.toolCalls.filter((call) => {
+        if (PRELOADED_TOOLS.has(call.name)) dropped.add(call.id);
+        return !PRELOADED_TOOLS.has(call.name);
+      });
+      if (calls.length > 0) kept.push({ ...message, toolCalls: calls });
+    } else if (!(message.toolCallId && dropped.has(message.toolCallId))) {
+      kept.push(message);
+    }
+  }
+  return kept;
+}
+
 /**
  * Handles one Telegram message: allowlist first (unknown chats produce no reply,
  * no LLM call and no tool call), then the bounded tool loop. Write tools only
@@ -125,6 +211,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
 
   const started = Date.now();
   try {
+    const preloaded = await preloadReads(tools, context, deps.audit);
     const result = await withSpan(
       "bot.turn",
       { profile, chat: hashChatId(chatId), tools: tools.length },
@@ -141,7 +228,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
           },
           audit: deps.audit,
           systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
-          history: deps.memory?.history(chatId) ?? [],
+          history: [...(deps.memory?.history(chatId) ?? []), ...preloaded],
           userMessage: message.text,
         }),
     );
@@ -159,7 +246,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
     });
 
     const reply = plainReply(result.reply);
-    deps.memory?.record(chatId, message.text, reply, result.readTrace);
+    deps.memory?.record(chatId, message.text, reply, withoutPreloaded(result.readTrace));
     return { kind: "reply", text: reply, proposals: result.proposals };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

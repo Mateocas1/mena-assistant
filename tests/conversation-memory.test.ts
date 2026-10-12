@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AuditLogger } from "../src/audit/index.js";
 import { handleCallback, handleMessage, type BotDeps } from "../src/bot/core.js";
+import { MockStockBackend } from "../src/adapters/stock/mock.js";
 import { ConversationMemory } from "../src/bot/memory.js";
 import { parseConfig } from "../src/config.js";
 import { createToolRegistry } from "../src/mcp/tools/index.js";
@@ -36,6 +37,7 @@ function setup(script: ScriptStep[], memory: ConversationMemory) {
     config,
     registry: createToolRegistry({ turnos: true, stock: true, tareas: false }),
     backend: test.backend,
+    stock: new MockStockBackend(),
     proposals: test.proposals,
     transport,
     audit: new AuditLogger({ sink: () => {}, clock: fixedClock(TEST_INSTANT) }),
@@ -45,9 +47,14 @@ function setup(script: ScriptStep[], memory: ConversationMemory) {
   return { deps, transport };
 }
 
-function conversation(request: { messages: readonly { role: string; content: string | null }[] }) {
+function conversation(request: {
+  messages: readonly { role: string; content: string | null; toolCalls?: readonly unknown[] }[];
+}) {
   return request.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(
+      (message) =>
+        message.role === "user" || (message.role === "assistant" && !message.toolCalls?.length),
+    )
     .map((message) => `${message.role}: ${message.content ?? ""}`);
 }
 
@@ -241,27 +248,21 @@ describe("remembered reads", () => {
     const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
     const { deps, transport } = setup(
       [
-        toolCallCompletion("turnos.del_dia", { fecha: "hoy" }),
-        textCompletion("¿Qué color le pusiste?"),
+        toolCallCompletion("stock.alertas", {}),
+        textCompletion("Tenés dos cosas bajas."),
         textCompletion("Anotado."),
       ],
       memory,
     );
 
-    await handleMessage(deps, { chatId: ROMI, text: "registrá el soft gel de ana" });
-    await handleMessage(deps, { chatId: ROMI, text: "Nude Glitter 118" });
+    await handleMessage(deps, { chatId: ROMI, text: "¿qué me falta?" });
+    await handleMessage(deps, { chatId: ROMI, text: "¿y de tips?" });
 
     const second = transport.requests[2]!.messages;
-    const toolResult = second.find((message) => message.role === "tool");
-    expect(toolResult?.content).toContain("Ana G.");
-    expect(second.map((message) => message.role)).toEqual([
-      "system",
-      "user",
-      "assistant",
-      "tool",
-      "assistant",
-      "user",
-    ]);
+    const replayed = second.find(
+      (message) => message.role === "tool" && message.toolCallId?.endsWith("call_1"),
+    );
+    expect(replayed?.content).toContain("cantidad");
   });
 });
 
@@ -301,5 +302,90 @@ describe("turn latency audit", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .find((entry) => entry.event === "llm_turn");
     expect(turn).toMatchObject({ modelCalls: 2, latencyMs: expect.any(Number) });
+  });
+});
+
+describe("preloaded reads", () => {
+  it("hands the model today's appointments and the catalog before the message", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps, transport } = setup([textCompletion("Hola Romi.")], memory);
+
+    await handleMessage(deps, { chatId: ROMI, text: "registrá el soft gel de ana" });
+
+    const messages = transport.requests[0]!.messages;
+    expect(messages.map((message) => message.role)).toEqual([
+      "system",
+      "assistant",
+      "tool",
+      "tool",
+      "user",
+    ]);
+    expect(messages[1]?.toolCalls?.map((call) => call.name)).toEqual([
+      "turnos.del_dia",
+      "stock.catalogo",
+    ]);
+    expect(messages[2]?.content).toContain("Ana G.");
+    expect(messages[3]?.content).toContain("City 22");
+  });
+
+  it("still answers when a preload fails, without that read", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps, transport } = setup([textCompletion("Hola Romi.")], memory);
+    const broken: BotDeps = {
+      ...deps,
+      stock: {
+        ...deps.stock!,
+        catalogo: async () => {
+          throw new Error("stock down");
+        },
+      },
+    };
+
+    const reply = await handleMessage(broken, { chatId: ROMI, text: "hola" });
+
+    expect(reply).toMatchObject({ text: "Hola Romi." });
+    const messages = transport.requests[0]!.messages;
+    expect(messages[1]?.toolCalls?.map((call) => call.name)).toEqual(["turnos.del_dia"]);
+    expect(messages.filter((message) => message.role === "tool")).toHaveLength(1);
+  });
+
+  it("does not replay a preloaded read from memory on the next message", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps, transport } = setup(
+      [
+        toolCallCompletion("stock.catalogo", { solo_colores: true }),
+        textCompletion("¿Qué forma y talles?"),
+        textCompletion("Anotado."),
+      ],
+      memory,
+    );
+
+    await handleMessage(deps, { chatId: ROMI, text: "registrá el soft gel de ana" });
+    await handleMessage(deps, { chatId: ROMI, text: "almond, 4 del 3 y 6 del 5" });
+
+    const catalogReads = transport.requests[2]!.messages.filter((message) =>
+      message.toolCalls?.some((call) => call.name === "stock.catalogo"),
+    );
+    expect(catalogReads).toHaveLength(1);
+  });
+});
+
+describe("preload audit", () => {
+  it("audits each preloaded read like any other tool call", async () => {
+    const lines: string[] = [];
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps } = setup([textCompletion("Hola.")], memory);
+    const audited: BotDeps = {
+      ...deps,
+      audit: new AuditLogger({ sink: (line) => lines.push(line), clock: fixedClock(TEST_INSTANT) }),
+    };
+
+    await handleMessage(audited, { chatId: ROMI, text: "hola" });
+
+    const preloads = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.event === "tool_call" && entry.detail === "preload");
+    expect(preloads.map((entry) => entry.tool)).toEqual(["turnos.del_dia", "stock.catalogo"]);
+    expect(preloads.every((entry) => entry.status === "ok")).toBe(true);
   });
 });

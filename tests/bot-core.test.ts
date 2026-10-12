@@ -109,7 +109,8 @@ describe("message handling", () => {
 
     expect(reply.kind).toBe("reply");
     expect(reply.kind === "reply" && reply.text).toBe("Hoy tenés 2 turnos.");
-    expect(test.backend.delDiaCalls).toEqual([TEST_ART_DATE]);
+    // The preload and the model's own call both resolve "hoy" in ART.
+    expect(test.backend.delDiaCalls).toEqual([TEST_ART_DATE, TEST_ART_DATE]);
   });
 
   it("only hands romi the tools her profile allows", async () => {

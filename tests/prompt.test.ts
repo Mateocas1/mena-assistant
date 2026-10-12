@@ -44,7 +44,9 @@ describe("buildSystemPrompt", () => {
   it("asks the model to batch its reads", () => {
     const prompt = buildSystemPrompt(CLOCK);
     expect(prompt).toContain("cada herramienta de lectura una sola vez por mensaje");
-    expect(prompt).toContain("Si un resultado de una herramienta ya está en la conversación, usalo");
+    expect(prompt).toContain(
+      "Si un resultado de una herramienta ya está en la conversación, usalo",
+    );
   });
 
   it("asks for the shape of the tips along with their sizes", () => {
