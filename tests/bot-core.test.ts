@@ -294,11 +294,9 @@ describe("write proposals require a verified callback", () => {
     });
 
     expect(outcome.text).toContain("✅");
-    expect(outcome.text).toContain("decime el color que usaste");
-    expect(outcome.text).toContain(
-      "los tips que usaste (10 en total; pueden ser de distintos talles",
-    );
-    expect(outcome.text).toContain("apt_past_0800");
+    expect(outcome.text).toContain("el color que usaste");
+    expect(outcome.text).toContain("la forma y los talles de los tips");
+    expect(outcome.text).not.toContain("apt_past_0800");
   });
 
   it("does not ask for stock data when the stock flag is off", async () => {

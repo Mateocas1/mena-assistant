@@ -65,14 +65,22 @@ export interface StockChainHint {
 
 /** User-facing follow-up: asks only for what the appointment does not carry. */
 export function stockChainPrompt(chain: StockChainHint): string {
-  const color = "decime el color que usaste";
   const tips = chain.requiresTips
-    ? " y los tips que usaste (10 en total; pueden ser de distintos talles, por ejemplo «4 del 3 y 6 del 5»)"
+    ? " y la forma y los talles de los tips (10 en total, por ejemplo «almond: 4 del 3 y 6 del 5»)"
     : "";
-  const turno = chain.sourceAppointmentId
-    ? ` Así queda ligado al turno ${chain.sourceAppointmentId}.`
-    : "";
-  return `Para descontar el stock de ese servicio, ${color}${tips}.${turno}`;
+  return `Para descontar el stock, pasame el color que usaste${tips}.`;
+}
+
+/**
+ * Telegram gets the reply as plain text, so markdown markers would show up as
+ * literal asterisks: drop headings, bold, underline and code marks.
+ */
+export function plainReply(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1");
 }
 
 export interface BotCallbackResult {
@@ -150,8 +158,9 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
       detail: result.stoppedReason,
     });
 
-    deps.memory?.record(chatId, message.text, result.reply);
-    return { kind: "reply", text: result.reply, proposals: result.proposals };
+    const reply = plainReply(result.reply);
+    deps.memory?.record(chatId, message.text, reply);
+    return { kind: "reply", text: reply, proposals: result.proposals };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     deps.audit.log({

@@ -46,6 +46,19 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("cada herramienta de lectura una sola vez por mensaje");
   });
 
+  it("asks for the shape of the tips along with their sizes", () => {
+    const prompt = buildSystemPrompt(CLOCK, { stockEnabled: true });
+    expect(prompt).toContain("la forma y los talles");
+  });
+
+  it("talks like a close Rioplatense friend, without markdown or ids", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("rioplatense");
+    expect(prompt).toContain("voseo");
+    expect(prompt).toContain("Sin markdown");
+    expect(prompt).toContain("Nunca muestres ids");
+  });
+
   it("keeps the stock chain rules behind the stock flag", () => {
     expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
     expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");

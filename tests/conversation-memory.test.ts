@@ -203,6 +203,20 @@ describe("multi-turn conversation", () => {
   });
 });
 
+describe("reply formatting", () => {
+  it("strips the markdown markers Telegram would print literally", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps } = setup(
+      [textCompletion("### Turnos\n**Ana G.** a las __08:00__, color `Nude Glitter 118`")],
+      memory,
+    );
+
+    const reply = await handleMessage(deps, { chatId: ROMI, text: "¿qué turnos hay hoy?" });
+
+    expect(reply).toMatchObject({ text: "Turnos\nAna G. a las 08:00, color Nude Glitter 118" });
+  });
+});
+
 describe("turn latency audit", () => {
   it("records how long a turn took and how many model calls it needed", async () => {
     const lines: string[] = [];
