@@ -220,6 +220,10 @@ comes back.
    chats and expired proposals execute nothing. Backend rejections (including
    HTTP 500 domain errors like "slot taken") become clear Spanish messages.
 
+A turn proposes **at most one write**. Further write tool calls in the same turn
+are refused (audited as `denied`) and answered with a tool result that tells the
+model to ask for confirmation on the pending action first; reads keep working.
+
 ### Conversation memory
 
 Each chat keeps its last six exchanges (the visible text only, no tool results)
@@ -229,10 +233,6 @@ is cancelled, and when one is confirmed — except a confirmed completion, which
 restarts the chat from the stock question. Nothing is persisted; a restart
 starts every chat over. Each `llm_turn` audit entry records `latencyMs` and
 `modelCalls`.
-
-A turn proposes **at most one write**. Further write tool calls in the same turn
-are refused (audited as `denied`) and answered with a tool result that tells the
-model to ask for confirmation on the pending action first; reads keep working.
 
 ## Stock (mena-nails)
 
