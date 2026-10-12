@@ -258,7 +258,17 @@ export async function handleMessage(
     });
 
     const reply = plainReply(result.reply);
-    deps.memory?.record(chatId, message.text, reply, withoutPreloaded(result.readTrace));
+    // The model only sees its own text next time; note the proposal so it does
+    // not propose the same action again while the buttons are still on screen.
+    const pending = result.proposals.map(
+      (proposal) => `\n(Propuesta ya mostrada, esperando su botón: ${proposal.summary})`,
+    );
+    deps.memory?.record(
+      chatId,
+      message.text,
+      `${reply}${pending.join("")}`,
+      withoutPreloaded(result.readTrace),
+    );
     return { kind: "reply", text: reply, proposals: result.proposals };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

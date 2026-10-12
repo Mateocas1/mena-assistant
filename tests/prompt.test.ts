@@ -70,6 +70,11 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("que no te preguntó");
   });
 
+  it("never proposes again what is already waiting for a button", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("No vuelvas a proponer una acción que ya está esperando su botón");
+  });
+
   it("keeps the stock chain rules behind the stock flag", () => {
     expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
     expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");

@@ -416,3 +416,20 @@ describe("streamed replies", () => {
     expect(reply).toMatchObject({ text: "Hola Romi" });
   });
 });
+
+describe("pending proposals in memory", () => {
+  it("remembers that a proposal is already on screen", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps } = setup(
+      [toolCallCompletion("turnos.cancelar", { appointmentId: "apt_today_0800", motivo: "viaje" })],
+      memory,
+    );
+
+    await handleMessage(deps, { chatId: ROMI, text: "cancelá el turno de ana" });
+
+    const remembered = memory.history(String(ROMI)).at(-1)?.content ?? "";
+    expect(remembered).toContain(
+      "(Propuesta ya mostrada, esperando su botón: Cancelar el turno de Ana G.",
+    );
+  });
+});
