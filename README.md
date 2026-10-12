@@ -234,7 +234,10 @@ Each chat keeps its last six exchanges in process memory, so an answer like
 "Nude Glitter 118" is read against the question it answers. The last two
 exchanges also replay their successful reads (today's appointments, the compact
 catalog), so the next message does not spend a model round trip on them; write
-results are never replayed. A chat is forgotten after 30 idle minutes, when a proposal
+results are never replayed. Before the model is called, the bot also runs
+`turnos.del_dia` (today) and `stock.catalogo` itself and hands their results in
+as if the model had asked (audited with `detail: "preload"`); a failed preload is
+skipped and the model can still call the tool. A chat is forgotten after 30 idle minutes, when a proposal
 is cancelled, and when one is confirmed — except a confirmed completion, which
 restarts the chat from the stock question. Nothing is persisted; a restart
 starts every chat over. Each `llm_turn` audit entry records `latencyMs` and
