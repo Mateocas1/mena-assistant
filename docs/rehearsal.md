@@ -98,7 +98,7 @@ tests plus the MCP write path above.
    - _"¿cómo está el stock?"_ → real numbers from the local mena-nails API
      (`stock.actual`), including low-stock alerts.
    - _"registrá el soft gel de ana, color Nude Glitter 118"_ → one question
-     for whatever is missing (the tips, which may mix sizes: _"4 del 3 y 6 del
+     for whatever is missing (the tip shape and sizes, which may mix: _"almond: 4 del 3 y 6 del
      5"_), never the colour again; answering it gives a proposal with
      the Spanish summary plus `✅ Confirmar` / `❌ Cancelar`. Tap **Confirmar** →
      _"Registrado…"_ and the tips drop by 10 in `Inventario` / `stock.actual`.
