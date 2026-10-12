@@ -28,6 +28,24 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toMatch(/distintos talles/);
   });
 
+  it("asks for every missing detail at once and never twice", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("pedilos todos juntos en un solo mensaje");
+    expect(prompt).toContain("No vuelvas a pedir un dato que Romi ya te dio");
+  });
+
+  it("only asks for the time when the client has more than one appointment that day", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain(
+      "Si esa clienta tiene un solo turno ese día, usalo sin preguntar la hora",
+    );
+  });
+
+  it("asks the model to batch its reads", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("cada herramienta de lectura una sola vez por mensaje");
+  });
+
   it("keeps the stock chain rules behind the stock flag", () => {
     expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
     expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");
