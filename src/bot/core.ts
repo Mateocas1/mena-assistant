@@ -115,6 +115,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
   const tools = deps.registry.forProfile(profile);
   const clock = deps.clock ?? systemClock;
 
+  const started = Date.now();
   try {
     const result = await withSpan(
       "bot.turn",
@@ -144,6 +145,8 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
       status: "ok",
       model: result.model,
       tokens: result.usage,
+      latencyMs: Date.now() - started,
+      modelCalls: result.modelCalls,
       detail: result.stoppedReason,
     });
 

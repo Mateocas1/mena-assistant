@@ -35,6 +35,8 @@ export interface AuditEntry {
   readonly args?: Readonly<Record<string, unknown>>;
   readonly status?: AuditStatus;
   readonly latencyMs?: number;
+  /** Model completions one Telegram turn needed (llm_turn only). */
+  readonly modelCalls?: number;
   readonly model?: string;
   readonly tokens?: AuditTokens;
   readonly proposalId?: string;

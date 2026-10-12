@@ -49,6 +49,8 @@ export interface ToolCallRecord {
 
 export interface ToolLoopResult {
   readonly reply: string;
+  /** Loop steps that asked the model; a fallback retry inside one step counts once. */
+  readonly modelCalls: number;
   readonly proposals: readonly Proposal[];
   readonly toolCalls: readonly ToolCallRecord[];
   /** Model that produced the final answer (the fallback when it was used). */
@@ -132,12 +134,14 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
   const retriedTools = new Set<string>();
   let usage = ZERO_USAGE;
   let toolCallCount = 0;
+  let modelCalls = 0;
   let lastContent = "";
   let usedModel = config.model;
   let usedFallback = false;
 
   const finish = (stoppedReason: ToolLoopStopReason, reply: string): ToolLoopResult => ({
     reply,
+    modelCalls,
     proposals,
     toolCalls: records,
     model: usedModel,
@@ -190,6 +194,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
   }
 
   for (;;) {
+    modelCalls += 1;
     const completion = await complete(messages);
     usage = addUsage(usage, completion.usage);
     if (completion.content && completion.content.trim().length > 0) {

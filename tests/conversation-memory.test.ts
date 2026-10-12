@@ -202,3 +202,28 @@ describe("multi-turn conversation", () => {
     expect(memory.history(String(ROMI))).toEqual([]);
   });
 });
+
+describe("turn latency audit", () => {
+  it("records how long a turn took and how many model calls it needed", async () => {
+    const lines: string[] = [];
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps } = setup(
+      [
+        toolCallCompletion("turnos.del_dia", { fecha: "hoy" }),
+        textCompletion("Hoy tenés 2 turnos."),
+      ],
+      memory,
+    );
+    const audited: BotDeps = {
+      ...deps,
+      audit: new AuditLogger({ sink: (line) => lines.push(line), clock: fixedClock(TEST_INSTANT) }),
+    };
+
+    await handleMessage(audited, { chatId: ROMI, text: "¿qué turnos hay hoy?" });
+
+    const turn = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.event === "llm_turn");
+    expect(turn).toMatchObject({ modelCalls: 2, latencyMs: expect.any(Number) });
+  });
+});
