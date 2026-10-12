@@ -20,6 +20,7 @@ import {
   assertBookableDate,
   appointmentLabel,
   describeAppointment,
+  findAppointmentAround,
   humanDay,
   findAppointment,
   findRecentAppointment,
@@ -199,7 +200,9 @@ export function createTurnosWriteTools(): ToolDefinition[] {
           .describe(`${FECHA_DESCRIPTION} Solo para mostrar el detalle en la confirmación.`),
       }),
       async propose(args, context) {
-        const appointment = await findAppointment(context, args.fecha, args.appointmentId);
+        const appointment =
+          (await findAppointment(context, args.fecha, args.appointmentId)) ??
+          (await findAppointmentAround(context, args.appointmentId));
         const summary = `Cancelar el turno ${
           appointment ? `de ${appointmentLabel(appointment, context.clock)}` : args.appointmentId
         }${args.motivo ? ` — motivo: ${args.motivo}` : ""}`;
@@ -417,7 +420,9 @@ export function createTurnosWriteTools(): ToolDefinition[] {
         const fecha = resolveDateOrArgumentError("turnos.reprogramar", args.fecha, context.clock);
         assertBookableDate("turnos.reprogramar", fecha, context.clock);
 
-        const current = await findAppointment(context, args.fecha_actual, args.appointmentId);
+        const current =
+          (await findAppointment(context, args.fecha_actual, args.appointmentId)) ??
+          (await findAppointmentAround(context, args.appointmentId));
         const to = `${humanDay(fecha, context.clock)} ${args.hora}`;
         const summary = current
           ? `Reprogramar el turno de ${appointmentLabel(current, context.clock)} para ${to}`

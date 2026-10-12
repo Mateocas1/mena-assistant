@@ -120,6 +120,25 @@ const STATUS_NAMES: Readonly<Record<string, string>> = {
   no_show: "no vino",
 };
 
+/**
+ * Finds an appointment by id when the model sent no day: the last two weeks,
+ * then the next 30 days (two reads, since the backend caps a range at 31 days).
+ */
+export async function findAppointmentAround(
+  context: ToolHandlerContext,
+  appointmentId: string,
+): Promise<Appointment | undefined> {
+  const recent = await findRecentAppointment(context, appointmentId);
+  if (recent) return recent;
+  try {
+    const today = artToday(context.clock);
+    const appointments = await context.backend.rango(addDays(today, 1), addDays(today, 30));
+    return appointments.find((appointment) => appointment.id === appointmentId);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Spanish name of an appointment status; unknown statuses pass through. */
 export function statusName(status: string): string {
   return STATUS_NAMES[status] ?? status;

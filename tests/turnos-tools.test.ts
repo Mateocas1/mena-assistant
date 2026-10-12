@@ -158,6 +158,33 @@ describe("turnos.pagos_pendientes and turnos.resumen", () => {
 });
 
 describe("turnos.cancelar (write tool)", () => {
+  it("finds a future appointment without a date within the backend's 31-day range", async () => {
+    const { context, backend } = makeTestContext();
+    const calls: [string, string][] = [];
+    const rango = backend.rango.bind(backend);
+    backend.rango = async (from: string, to: string) => {
+      calls.push([from, to]);
+      return await rango(from, to);
+    };
+
+    const result = await cancelar.execute({ appointmentId: "apt_tomorrow_1100" }, context);
+
+    expect(result.proposal?.summary).toContain("mañana");
+    for (const [from, to] of calls) {
+      const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
+      expect(days).toBeLessThanOrEqual(31);
+    }
+  });
+
+  it("names the client even when the model sends no date", async () => {
+    const { context } = makeTestContext();
+    const result = await cancelar.execute({ appointmentId: "apt_today_0800" }, context);
+
+    expect(result.proposal?.summary).toBe(
+      "Cancelar el turno de Ana G. (Servicio Soft Gel, hoy 08:00)",
+    );
+  });
+
   it("returns a proposal and never touches the backend", async () => {
     const { context, backend, proposals } = makeTestContext();
     const result = await cancelar.execute(
