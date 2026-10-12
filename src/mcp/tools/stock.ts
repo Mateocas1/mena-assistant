@@ -112,6 +112,23 @@ async function describeColor(
   }
 }
 
+/** Catalog labels for each tip allocation; the item id stands in when the catalog cannot be read. */
+async function describeTips(
+  stock: StockBackend,
+  tips: readonly { itemId: number; units: number }[],
+): Promise<{ itemId: number; units: number; label: string }[]> {
+  let catalog: readonly CatalogItem[] = [];
+  try {
+    catalog = await stock.catalogo();
+  } catch {
+    // Same as describeColor: the backend validates the ids anyway.
+  }
+  return tips.map((tip) => ({
+    ...tip,
+    label: catalog.find((item) => item.id === tip.itemId)?.displayLabel ?? `item ${tip.itemId}`,
+  }));
+}
+
 /**
  * `stock.*` tools. Reads hit mena-nails directly; `stock.registrar_servicio` is
  * the only write and returns a proposal. `stock.proponer_correccion` is advisory
@@ -207,7 +224,9 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
       description:
         "Propone registrar un servicio hecho para descontar los insumos exactos. " +
         "NO lo registra: devuelve una propuesta que la dueña confirma con un botón. " +
-        `Soft Gel exige exactamente ${SOFT_GEL_TIP_UNITS} tips (una forma y un talle); los retiros no se registran.`,
+        `Soft Gel usa ${SOFT_GEL_TIP_UNITS} tips en total, uno por uña, y casi siempre de distintos talles ` +
+        "(el pulgar no lleva el mismo talle que el meñique): pasá una entrada de tips por cada item usado. " +
+        "Los retiros no se registran.",
       schema: z.object({
         servicio: z
           .enum(["soft_gel", "capping", "semipermanente"])
@@ -225,7 +244,9 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
             }),
           )
           .optional()
-          .describe("Tips usados: obligatorio para soft_gel, exactamente 10 unidades en total."),
+          .describe(
+            "Tips usados, una entrada por item (talle/forma): obligatorio para soft_gel, 10 unidades sumando todas.",
+          ),
         sourceAppointmentId: z
           .string()
           .min(1)
@@ -240,14 +261,19 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
         assertTipRule("stock.registrar_servicio", args.servicio, args.tips);
 
         const { label, warning } = await describeColor(stock, args.colorItemId);
-        const tipTotal = (args.tips ?? []).reduce((sum, tip) => sum + tip.units, 0);
-        const tipSummary = tipTotal > 0 ? ` · ${tipTotal} tips` : "";
+        const tips = await describeTips(stock, args.tips ?? []);
+        const tipTotal = tips.reduce((sum, tip) => sum + tip.units, 0);
+        const tipSummary =
+          tipTotal > 0
+            ? ` · ${tipTotal} tips (${tips.map((tip) => `${tip.units} ${tip.label}`).join(", ")})`
+            : "";
         const appointment = args.sourceAppointmentId ? ` · turno ${args.sourceAppointmentId}` : "";
 
         const summary = `Registrar ${args.servicio} — color ${label}${tipSummary}${appointment}`;
         const diff = [
           `- color ${label} (item ${args.colorItemId}): disponible`,
-          `+ color ${label} (item ${args.colorItemId}): descontado 1${tipSummary}`,
+          `+ color ${label} (item ${args.colorItemId}): descontado 1`,
+          ...tips.map((tip) => `+ ${tip.label} (item ${tip.itemId}): descontado ${tip.units}`),
         ].join("\n");
 
         const proposal = context.proposals.create({

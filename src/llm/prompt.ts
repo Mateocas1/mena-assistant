@@ -24,8 +24,9 @@ export function buildSystemPrompt(clock: Clock, options: SystemPromptOptions = {
   const stockRules = options.stockEnabled
     ? [
         "- Cuando un turno queda completado, el stock se descuenta registrándolo: pedile a Romi el color usado",
-        "  y —si es Soft Gel— los tips (forma y talle, 10 en total), y proponé stock.registrar_servicio con",
-        "  sourceAppointmentId igual al id del turno. Los retiros no descuentan stock.",
+        "  y —si es Soft Gel— los tips: 10 en total, uno por uña, y casi siempre de distintos talles",
+        "  (por ejemplo «4 del 3 y 6 del 5»). Pasá una entrada de tips por cada talle/forma y proponé",
+        "  stock.registrar_servicio con sourceAppointmentId igual al id del turno. Los retiros no descuentan stock.",
         "- El stock y los precios se cambian sólo desde el panel de mena-nails: usá stock.proponer_correccion",
         "  para sugerir una revisión, nunca para cambiar cantidades ni precios.",
       ]

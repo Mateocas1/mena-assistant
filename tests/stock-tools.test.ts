@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { StockError, StockForbiddenError } from "../src/adapters/stock/client.js";
+import { StockError, StockForbiddenError, StockHttpError } from "../src/adapters/stock/client.js";
+import { translateStockError } from "../src/mcp/tools/stock-errors.js";
 import { MockStockBackend } from "../src/adapters/stock/mock.js";
 import { STOCK_ADVISORY_DISCLAIMER, createStockTools } from "../src/mcp/tools/stock.js";
 import { createToolRegistry } from "../src/mcp/tools/index.js";
@@ -90,6 +91,32 @@ describe("stock.registrar_servicio", () => {
     expect(result.proposal?.summary).toContain("apt_today_0800");
     expect(result.proposal?.diff).toContain("descontado");
     expect((await stock.actual()).find((entry) => entry.itemId === 1)?.units).toBe(6);
+  });
+
+  it("accepts tips of several sizes and shows each one in the proposal", async () => {
+    const { context, stock } = makeStockTestContext();
+    const result = await registrar.execute(
+      {
+        servicio: "soft_gel",
+        colorItemId: 1,
+        tips: [
+          { itemId: 10, units: 4 },
+          { itemId: 11, units: 6 },
+        ],
+      },
+      context,
+    );
+
+    expect(result.proposal?.summary).toContain("10 tips (4 Tips almond 5, 6 Tips almond 6)");
+    expect(result.proposal?.diff).toContain("+ Tips almond 5 (item 10): descontado 4");
+    expect(result.proposal?.diff).toContain("+ Tips almond 6 (item 11): descontado 6");
+    expect((await stock.actual()).find((entry) => entry.itemId === 10)?.units).toBe(100);
+    expect((await stock.actual()).find((entry) => entry.itemId === 11)?.units).toBe(15);
+  });
+
+  it("tells the model that one service can mix tip sizes", () => {
+    expect(registrar.description).not.toMatch(/una forma y un talle/);
+    expect(registrar.description).toMatch(/distintos talles/);
   });
 
   it("rejects a wrong tip count before creating a proposal", async () => {
@@ -203,5 +230,18 @@ describe("stock.proponer_correccion", () => {
     expect(result.proposal).toBeUndefined();
     expect(stockCalls).toBe(0);
     expect(base.proposals.get(proposalsBefore.id)?.tool).toBe("sentinel");
+  });
+});
+
+describe("stock error copy", () => {
+  it("does not tell Romi that Soft Gel takes a single tip size", () => {
+    const error = translateStockError(
+      new StockHttpError(400, "Soft Gel requires exactly ten allocated tips"),
+      "fallback",
+    );
+
+    expect(error.userMessage).toBe(
+      "Soft Gel necesita exactamente 10 tips en total (pueden ser de distintos talles).",
+    );
   });
 });

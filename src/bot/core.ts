@@ -66,7 +66,9 @@ export interface StockChainHint {
 /** User-facing follow-up: asks only for what the appointment does not carry. */
 export function stockChainPrompt(chain: StockChainHint): string {
   const color = "decime el color que usaste";
-  const tips = chain.requiresTips ? " y los tips (forma y talle, 10 en total)" : "";
+  const tips = chain.requiresTips
+    ? " y los tips que usaste (10 en total; pueden ser de distintos talles, por ejemplo «4 del 3 y 6 del 5»)"
+    : "";
   const turno = chain.sourceAppointmentId
     ? ` Así queda ligado al turno ${chain.sourceAppointmentId}.`
     : "";

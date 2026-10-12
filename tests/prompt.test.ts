@@ -22,6 +22,12 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toMatch(/no llames a otra herramienta/);
   });
 
+  it("asks for the tips as several sizes adding up to ten", () => {
+    const prompt = buildSystemPrompt(CLOCK, { stockEnabled: true });
+    expect(prompt).not.toContain("forma y talle, 10 en total");
+    expect(prompt).toMatch(/distintos talles/);
+  });
+
   it("keeps the stock chain rules behind the stock flag", () => {
     expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
     expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");

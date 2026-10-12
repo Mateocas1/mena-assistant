@@ -8,7 +8,7 @@ const TRANSLATIONS: ReadonlyArray<readonly [RegExp, string]> = [
   ],
   [
     /exactly ten allocated tips|ten tips/i,
-    "Soft Gel necesita exactamente 10 tips (una forma y un talle).",
+    "Soft Gel necesita exactamente 10 tips en total (pueden ser de distintos talles).",
   ],
   [/tip allocations require soft gel/i, "Ese servicio no usa tips."],
   [/invalid tip allocation|invalid tip/i, "La asignación de tips no es válida."],

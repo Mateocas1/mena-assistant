@@ -295,7 +295,9 @@ describe("write proposals require a verified callback", () => {
 
     expect(outcome.text).toContain("✅");
     expect(outcome.text).toContain("decime el color que usaste");
-    expect(outcome.text).toContain("tips (forma y talle, 10 en total)");
+    expect(outcome.text).toContain(
+      "los tips que usaste (10 en total; pueden ser de distintos talles",
+    );
     expect(outcome.text).toContain("apt_past_0800");
   });
 
