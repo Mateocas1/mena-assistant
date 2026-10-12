@@ -1,5 +1,11 @@
 import { Bot, InlineKeyboard } from "grammy";
+import { resolveProfile } from "./allowlist.js";
 import { handleCallback, handleMessage, type BotDeps, type CallbackAction } from "./core.js";
+import { keepTyping } from "./typing.js";
+
+function isAllowlisted(deps: BotDeps, chatId: number): boolean {
+  return resolveProfile(deps.config.telegram.allowlist, String(chatId)) !== undefined;
+}
 
 export const CONFIRM_PREFIX = "confirm:";
 export const CANCEL_PREFIX = "cancel:";
@@ -41,7 +47,16 @@ export function createBot(token: string, deps: BotDeps): Bot {
   const bot = new Bot(token);
 
   bot.on("message:text", async (ctx) => {
-    const reply = await handleMessage(deps, { chatId: ctx.chat.id, text: ctx.message.text });
+    // Typing only for allow-listed chats: a stranger must not see any sign of life.
+    const stopTyping = isAllowlisted(deps, ctx.chat.id)
+      ? keepTyping(() => ctx.replyWithChatAction("typing"))
+      : () => undefined;
+    let reply;
+    try {
+      reply = await handleMessage(deps, { chatId: ctx.chat.id, text: ctx.message.text });
+    } finally {
+      stopTyping();
+    }
     if (reply.kind === "ignored") return;
 
     await ctx.reply(reply.text);
