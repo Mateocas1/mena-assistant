@@ -191,7 +191,16 @@ function withoutPreloaded(trace: readonly LlmMessage[]): LlmMessage[] {
  * no LLM call and no tool call), then the bounded tool loop. Write tools only
  * come back as proposals; nothing is executed here.
  */
-export async function handleMessage(deps: BotDeps, message: IncomingMessage): Promise<BotReply> {
+export interface HandleMessageOptions {
+  /** Receives the reply so far, markdown already stripped, while the model writes it. */
+  readonly onText?: (textSoFar: string) => void;
+}
+
+export async function handleMessage(
+  deps: BotDeps,
+  message: IncomingMessage,
+  options: HandleMessageOptions = {},
+): Promise<BotReply> {
   const chatId = String(message.chatId);
   const profile = resolveProfile(deps.config.telegram.allowlist, chatId);
 
@@ -229,6 +238,9 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
           audit: deps.audit,
           systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
           history: [...(deps.memory?.history(chatId) ?? []), ...preloaded],
+          ...(options.onText
+            ? { onText: (text: string) => options.onText?.(plainReply(text)) }
+            : {}),
           userMessage: message.text,
         }),
     );

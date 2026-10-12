@@ -389,3 +389,30 @@ describe("preload audit", () => {
     expect(preloads.every((entry) => entry.status === "ok")).toBe(true);
   });
 });
+
+describe("streamed replies", () => {
+  it("passes the model's text to the caller as it arrives, without markdown", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps } = setup([], memory);
+    const streaming: BotDeps = {
+      ...deps,
+      transport: {
+        async complete(_request, options) {
+          options.onText?.("**Hola**");
+          options.onText?.("**Hola** Romi");
+          return { content: "**Hola** Romi", toolCalls: [], model: "m" };
+        },
+      },
+    };
+    const partials: string[] = [];
+
+    const reply = await handleMessage(
+      streaming,
+      { chatId: ROMI, text: "hola" },
+      { onText: (text) => partials.push(text) },
+    );
+
+    expect(partials).toEqual(["Hola", "Hola Romi"]);
+    expect(reply).toMatchObject({ text: "Hola Romi" });
+  });
+});

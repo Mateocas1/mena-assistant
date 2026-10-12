@@ -38,6 +38,8 @@ export interface LlmCompletion {
 export interface LlmCallOptions {
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  /** When set, the reply is streamed and this receives the text so far after each chunk. */
+  readonly onText?: (textSoFar: string) => void;
 }
 
 /** Transport seam: the real OpenAI-compatible client, or a scripted one in tests. */

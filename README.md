@@ -228,6 +228,14 @@ A turn proposes **at most one write**. Further write tool calls in the same turn
 are refused (audited as `denied`) and answered with a tool result that tells the
 model to ask for confirmation on the pending action first; reads keep working.
 
+### Streaming and typing
+
+While the model works the chat shows "escribiendo…" (renewed every 4 s,
+allow-listed chats only). The model call is streamed: the first ~20 characters
+of the reply open a message that is edited at most once per second, and the
+final text replaces it. With reasoning models most of the wait happens before
+the first character, so streaming mainly helps long answers.
+
 ### Conversation memory
 
 Each chat keeps its last six exchanges in process memory, so an answer like

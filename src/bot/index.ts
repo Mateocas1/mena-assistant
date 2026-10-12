@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard, type BotError, type Context } from "grammy";
 import { resolveProfile } from "./allowlist.js";
 import { handleCallback, handleMessage, type BotDeps, type CallbackAction } from "./core.js";
+import { createStreamedMessage } from "./streaming.js";
 import { keepTyping } from "./typing.js";
 
 function isAllowlisted(deps: BotDeps, chatId: number): boolean {
@@ -79,15 +80,29 @@ export function createBot(token: string, deps: BotDeps): Bot {
     const stopTyping = isAllowlisted(deps, ctx.chat.id)
       ? keepTyping(() => ctx.replyWithChatAction("typing"))
       : () => undefined;
+    let messageId: number | undefined;
+    const live = createStreamedMessage({
+      send: async (text) => {
+        const sent = await sendWithRetry(() => ctx.reply(text));
+        messageId = sent.message_id;
+      },
+      edit: async (text) => {
+        if (messageId !== undefined) await ctx.api.editMessageText(ctx.chat.id, messageId, text);
+      },
+    });
     let reply;
     try {
-      reply = await handleMessage(deps, { chatId: ctx.chat.id, text: ctx.message.text });
+      reply = await handleMessage(
+        deps,
+        { chatId: ctx.chat.id, text: ctx.message.text },
+        { onText: (text) => live.update(text) },
+      );
     } finally {
       stopTyping();
     }
     if (reply.kind === "ignored") return;
 
-    await sendWithRetry(() => ctx.reply(reply.text));
+    await live.finish(reply.text);
     for (const proposal of reply.proposals) {
       await sendWithRetry(() =>
         ctx.reply(proposalMessage(proposal.summary, proposal.diff), {

@@ -31,6 +31,8 @@ export interface ToolLoopOptions {
   readonly systemPrompt: string;
   /** Earlier user/assistant text of this chat, oldest first. */
   readonly history?: readonly LlmMessage[];
+  /** Streams each model call's text so far (for a live Telegram message). */
+  readonly onText?: (textSoFar: string) => void;
   readonly userMessage: string;
 }
 
@@ -166,7 +168,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         () =>
           transport.complete(
             { model: config.model, messages: messages_, tools: toolSpecs },
-            { timeoutMs: config.timeoutMs },
+            { timeoutMs: config.timeoutMs, ...(options.onText ? { onText: options.onText } : {}) },
           ),
       );
     } catch (primaryError) {
@@ -186,7 +188,10 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
           () =>
             transport.complete(
               { model: config.fallbackModel, messages: messages_, tools: toolSpecs },
-              { timeoutMs: config.timeoutMs },
+              {
+                timeoutMs: config.timeoutMs,
+                ...(options.onText ? { onText: options.onText } : {}),
+              },
             ),
         );
         usedFallback = true;

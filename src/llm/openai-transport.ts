@@ -92,41 +92,89 @@ export class OpenAiTransport implements LlmTransport {
   }
 
   async complete(request: LlmCompletionRequest, options: LlmCallOptions): Promise<LlmCompletion> {
-    const response = await this.client.chat.completions.create(
-      {
-        model: request.model,
-        messages: toChatMessages(request.messages),
-        ...(request.tools.length > 0
-          ? {
-              tools: request.tools.map((tool) => ({
-                ...tool,
-                function: { ...tool.function, name: toWireToolName(tool.function.name) },
-              })) as unknown as OpenAI.Chat.Completions.ChatCompletionTool[],
-            }
-          : {}),
-      },
-      {
-        timeout: options.timeoutMs,
-        ...(options.signal ? { signal: options.signal } : {}),
-      },
-    );
+    const body = {
+      model: request.model,
+      messages: toChatMessages(request.messages),
+      ...(request.tools.length > 0
+        ? {
+            tools: request.tools.map((tool) => ({
+              ...tool,
+              function: { ...tool.function, name: toWireToolName(tool.function.name) },
+            })) as unknown as OpenAI.Chat.Completions.ChatCompletionTool[],
+          }
+        : {}),
+    };
+    const requestOptions = {
+      timeout: options.timeoutMs,
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
 
+    if (options.onText) return await this.stream(body, requestOptions, options.onText);
+
+    const response = await this.client.chat.completions.create(body, requestOptions);
     const message = response.choices[0]?.message;
-    const usage = response.usage;
-
     return {
       content: message?.content ?? null,
       toolCalls: toToolCalls(message?.tool_calls),
       model: response.model,
-      ...(usage
-        ? {
-            usage: {
-              prompt: usage.prompt_tokens,
-              completion: usage.completion_tokens,
-              total: usage.total_tokens,
-            },
-          }
-        : {}),
+      ...usageOf(response.usage),
     };
   }
+
+  /** Same request with `stream: true`: text goes to `onText` as it arrives, tool calls are reassembled. */
+  private async stream(
+    body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+    requestOptions: { timeout: number; signal?: AbortSignal },
+    onText: (textSoFar: string) => void,
+  ): Promise<LlmCompletion> {
+    const chunks = await this.client.chat.completions.create(
+      { ...body, stream: true, stream_options: { include_usage: true } },
+      requestOptions,
+    );
+    let content = "";
+    let model = body.model;
+    let usage: OpenAI.Completions.CompletionUsage | undefined;
+    const calls = new Map<number, { id: string; name: string; arguments: string }>();
+
+    for await (const chunk of chunks) {
+      model = chunk.model || model;
+      if (chunk.usage) usage = chunk.usage;
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) continue;
+      if (delta.content) {
+        content += delta.content;
+        onText(content);
+      }
+      for (const fragment of delta.tool_calls ?? []) {
+        const call = calls.get(fragment.index) ?? { id: "", name: "", arguments: "" };
+        if (fragment.id) call.id = fragment.id;
+        if (fragment.function?.name) call.name += fragment.function.name;
+        if (fragment.function?.arguments) call.arguments += fragment.function.arguments;
+        calls.set(fragment.index, call);
+      }
+    }
+
+    return {
+      content: content.length > 0 ? content : null,
+      toolCalls: [...calls.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, call]) => ({ ...call, name: fromWireToolName(call.name) })),
+      model,
+      ...usageOf(usage),
+    };
+  }
+}
+
+function usageOf(usage: OpenAI.Completions.CompletionUsage | null | undefined): {
+  usage?: { prompt: number; completion: number; total: number };
+} {
+  return usage
+    ? {
+        usage: {
+          prompt: usage.prompt_tokens,
+          completion: usage.completion_tokens,
+          total: usage.total_tokens,
+        },
+      }
+    : {};
 }
