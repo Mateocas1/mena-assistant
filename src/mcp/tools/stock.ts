@@ -254,8 +254,8 @@ export function createStockTools(options: StockToolsOptions): ToolDefinition[] {
       description:
         "Propone registrar un servicio hecho para descontar los insumos exactos. " +
         "NO lo registra: devuelve una propuesta que la dueña confirma con un botón. " +
-        `Soft Gel usa ${SOFT_GEL_TIP_UNITS} tips en total, uno por uña, y casi siempre de distintos talles ` +
-        "(el pulgar no lleva el mismo talle que el meñique): pasá una entrada de tips por cada item usado. " +
+        `Soft Gel usa ${SOFT_GEL_TIP_UNITS} tips en total, uno por uña, casi siempre de distintos talles: ` +
+        "pasá una entrada de tips por cada item usado. " +
         "Los retiros no se registran.",
       schema: z.object({
         servicio: z

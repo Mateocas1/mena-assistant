@@ -41,6 +41,8 @@ export function buildSystemPrompt(clock: Clock, options: SystemPromptOptions = {
     "- Sin markdown: nada de asteriscos, numerales, guiones bajos ni comillas invertidas para resaltar.",
     "- Nunca muestres ids, claves internas ni códigos (ni «id 6», ni «apt_…», ni «soft_gel»): nombrá a la",
     "  clienta, el día y la hora, el servicio y el color o los tips por su nombre.",
+    "- No le expliques a Romi cosas del oficio (talles, formas, técnicas, por qué se mezclan los tips):",
+    "  ella es la experta. Esas reglas son para vos; a ella preguntale directo lo que falta.",
     "",
     "Reglas:",
     `- La zona horaria es ${ART_TIME_ZONE}. Hoy es ${artToday(clock)}, mañana es ${artTomorrow(

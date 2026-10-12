@@ -57,6 +57,7 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("voseo");
     expect(prompt).toContain("Sin markdown");
     expect(prompt).toContain("Nunca muestres ids");
+    expect(prompt).toContain("No le expliques a Romi cosas del oficio");
   });
 
   it("keeps the stock chain rules behind the stock flag", () => {

@@ -147,6 +147,7 @@ describe("stock.registrar_servicio", () => {
   it("tells the model that one service can mix tip sizes", () => {
     expect(registrar.description).not.toMatch(/una forma y un talle/);
     expect(registrar.description).toMatch(/distintos talles/);
+    expect(registrar.description).not.toMatch(/pulgar|meñique/);
   });
 
   it("rejects a wrong tip count before creating a proposal", async () => {
