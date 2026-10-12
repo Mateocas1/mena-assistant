@@ -36,7 +36,8 @@ export interface ToolLoopOptions {
 
 export type ToolCallStatus = "ok" | "error" | "proposal" | "denied";
 
-export type ToolLoopStopReason = "completed" | "tool_call_cap" | "invalid_arguments";
+export type ToolLoopStopReason =
+  "completed" | "proposal_ready" | "tool_call_cap" | "invalid_arguments";
 
 export interface ToolCallRecord {
   readonly tool: string;
@@ -51,6 +52,8 @@ export interface ToolLoopResult {
   readonly reply: string;
   /** Loop steps that asked the model; a fallback retry inside one step counts once. */
   readonly modelCalls: number;
+  /** The turn's successful read calls and their results, for the conversation memory. */
+  readonly readTrace: readonly LlmMessage[];
   readonly proposals: readonly Proposal[];
   readonly toolCalls: readonly ToolCallRecord[];
   /** Model that produced the final answer (the fallback when it was used). */
@@ -64,6 +67,9 @@ export const CAP_REPLY =
   "Alcancé el límite de consultas para este mensaje. Probá de nuevo con un pedido más puntual.";
 export const INVALID_ARGUMENTS_REPLY =
   "No pude interpretar los datos de la consulta y preferí no ejecutar nada. ¿Me lo reformulás?";
+/** Sent with a proposal when the model wrote nothing of its own: the buttons follow. */
+export const PROPOSAL_REPLY = "Dale, fijate si está bien y confirmame:";
+
 export const EMPTY_REPLY = "No pude armar una respuesta. ¿Me lo preguntás de otra forma?";
 
 const ZERO_USAGE: LlmUsage = { prompt: 0, completion: 0, total: 0 };
@@ -135,6 +141,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
   let usage = ZERO_USAGE;
   let toolCallCount = 0;
   let modelCalls = 0;
+  const okReadCallIds = new Set<string>();
   let lastContent = "";
   let usedModel = config.model;
   let usedFallback = false;
@@ -142,6 +149,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
   const finish = (stoppedReason: ToolLoopStopReason, reply: string): ToolLoopResult => ({
     reply,
     modelCalls,
+    readTrace: readTraceOf(messages, okReadCallIds),
     proposals,
     toolCalls: records,
     model: usedModel,
@@ -327,6 +335,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         const latencyMs = Date.now() - started;
 
         if (result.proposal) proposals.push(result.proposal);
+        else if (tool.kind === "read") okReadCallIds.add(call.id);
         records.push({
           tool: call.name,
           args: parsedArgs.value,
@@ -391,5 +400,25 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         });
       }
     }
+
+    // The proposal's summary and buttons are what Romi acts on; another model
+    // round trip only to write a closing line costs seconds and adds nothing.
+    if (proposals.length > 0) {
+      return finish("proposal_ready", lastContent || PROPOSAL_REPLY);
+    }
   }
+}
+
+/** Assistant read calls that succeeded, each followed by its tool result. */
+function readTraceOf(messages: readonly LlmMessage[], okIds: ReadonlySet<string>): LlmMessage[] {
+  const trace: LlmMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && message.toolCalls) {
+      const calls = message.toolCalls.filter((call) => okIds.has(call.id));
+      if (calls.length > 0) trace.push({ role: "assistant", content: null, toolCalls: calls });
+    } else if (message.role === "tool" && message.toolCallId && okIds.has(message.toolCallId)) {
+      trace.push({ role: "tool", toolCallId: message.toolCallId, content: message.content });
+    }
+  }
+  return trace;
 }

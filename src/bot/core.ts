@@ -159,7 +159,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
     });
 
     const reply = plainReply(result.reply);
-    deps.memory?.record(chatId, message.text, reply);
+    deps.memory?.record(chatId, message.text, reply, result.readTrace);
     return { kind: "reply", text: reply, proposals: result.proposals };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

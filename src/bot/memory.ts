@@ -7,41 +7,69 @@ export interface ConversationMemoryOptions {
   readonly idleMinutes?: number;
   /** User/assistant exchanges kept per chat (default 6). */
   readonly maxExchanges?: number;
+  /** Most recent exchanges whose read results are replayed (default 2). */
+  readonly readExchanges?: number;
+}
+
+interface Exchange {
+  readonly user?: string;
+  readonly assistant: string;
+  /** Read calls and their results; ids already namespaced per exchange. */
+  readonly reads: readonly LlmMessage[];
 }
 
 interface ChatHistory {
-  messages: LlmMessage[];
+  exchanges: Exchange[];
   lastActivity: number;
+  sequence: number;
 }
 
 /**
  * Short per-chat memory so a reply like "Nude Glitter 118" is read as the answer
- * to the bot's last question. It keeps only the visible text of each exchange
- * (no tool results, so no catalog or client data), lives in process memory and
- * forgets a chat after the idle window.
+ * to the bot's last question. Every exchange keeps its visible text; the last
+ * two also keep their successful reads (today's appointments, the compact
+ * catalog), so the next message does not spend a model round trip re-reading
+ * them. It lives in process memory and forgets a chat after the idle window.
  */
 export class ConversationMemory {
   private readonly chats = new Map<string, ChatHistory>();
   private readonly clock: Clock;
   private readonly idleMs: number;
-  private readonly maxMessages: number;
+  private readonly maxExchanges: number;
+  private readonly readExchanges: number;
 
   constructor(options: ConversationMemoryOptions = {}) {
     this.clock = options.clock ?? systemClock;
     this.idleMs = (options.idleMinutes ?? 30) * 60_000;
-    this.maxMessages = (options.maxExchanges ?? 6) * 2;
+    this.maxExchanges = options.maxExchanges ?? 6;
+    this.readExchanges = options.readExchanges ?? 2;
   }
 
   history(chatId: string): readonly LlmMessage[] {
     const chat = this.live(chatId);
-    return chat ? [...chat.messages] : [];
+    if (!chat) return [];
+    const firstWithReads = chat.exchanges.length - this.readExchanges;
+    return chat.exchanges.flatMap((exchange, index) => [
+      ...(exchange.user === undefined ? [] : [{ role: "user" as const, content: exchange.user }]),
+      ...(index >= firstWithReads ? exchange.reads : []),
+      { role: "assistant" as const, content: exchange.assistant },
+    ]);
   }
 
-  record(chatId: string, userText: string, assistantText: string): void {
-    const chat = this.live(chatId) ?? { messages: [], lastActivity: 0 };
-    chat.messages.push({ role: "user", content: userText });
-    chat.messages.push({ role: "assistant", content: assistantText });
-    chat.messages = chat.messages.slice(-this.maxMessages);
+  record(
+    chatId: string,
+    userText: string,
+    assistantText: string,
+    reads: readonly LlmMessage[] = [],
+  ): void {
+    const chat = this.live(chatId) ?? { exchanges: [], lastActivity: 0, sequence: 0 };
+    chat.sequence += 1;
+    chat.exchanges.push({
+      user: userText,
+      assistant: assistantText,
+      reads: namespaceIds(reads, `m${chat.sequence}_`),
+    });
+    chat.exchanges = chat.exchanges.slice(-this.maxExchanges);
     chat.lastActivity = this.now();
     this.chats.set(chatId, chat);
   }
@@ -49,8 +77,9 @@ export class ConversationMemory {
   /** Starts the chat over from a question the bot asked outside the model (a button reply). */
   replaceWithAssistant(chatId: string, assistantText: string): void {
     this.chats.set(chatId, {
-      messages: [{ role: "assistant", content: assistantText }],
+      exchanges: [{ assistant: assistantText, reads: [] }],
       lastActivity: this.now(),
+      sequence: 0,
     });
   }
 
@@ -71,4 +100,15 @@ export class ConversationMemory {
   private now(): number {
     return this.clock().getTime();
   }
+}
+
+/** Providers reuse ids like "call_1" across turns; replayed calls must stay unique. */
+function namespaceIds(messages: readonly LlmMessage[], prefix: string): LlmMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    ...(message.toolCallId ? { toolCallId: `${prefix}${message.toolCallId}` } : {}),
+    ...(message.toolCalls
+      ? { toolCalls: message.toolCalls.map((call) => ({ ...call, id: `${prefix}${call.id}` })) }
+      : {}),
+  }));
 }

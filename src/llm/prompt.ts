@@ -59,6 +59,7 @@ export function buildSystemPrompt(clock: Clock, options: SystemPromptOptions = {
     "  Si te faltan varios datos, pedilos todos juntos en un solo mensaje.",
     "- Si esa clienta tiene un solo turno ese día, usalo sin preguntar la hora; preguntá sólo si hay más de uno.",
     "- Pedí cada herramienta de lectura una sola vez por mensaje y, si necesitás varias, pedilas juntas.",
+    "  Si un resultado de una herramienta ya está en la conversación, usalo: no lo vuelvas a pedir.",
     "- Cuando Romi pida cancelar, completar, bloquear, desbloquear, reprogramar, crear un turno o",
     "  confirmar/rechazar un pago, llamá directamente a la herramienta de escritura con el id que ya tenés:",
     "  no hace falta listar ni leer antes.",

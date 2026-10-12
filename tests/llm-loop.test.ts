@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { TurnosNotConfiguredError } from "../src/adapters/turnos/client.js";
 import { AuditLogger, type AuditEntry } from "../src/audit/index.js";
 import { parseConfig } from "../src/config.js";
-import { CAP_REPLY, INVALID_ARGUMENTS_REPLY, runToolLoop } from "../src/llm/loop.js";
+import {
+  CAP_REPLY,
+  INVALID_ARGUMENTS_REPLY,
+  PROPOSAL_REPLY,
+  runToolLoop,
+} from "../src/llm/loop.js";
 import { buildSystemPrompt } from "../src/llm/prompt.js";
 import { LlmError } from "../src/llm/types.js";
 import { createToolRegistry } from "../src/mcp/tools/index.js";
@@ -204,21 +209,52 @@ describe("LLM tool loop", () => {
     expect(denied?.tool).toBe("turnos.cancelar");
   });
 
-  it("tells the model to ask for the pending proposal before another write", async () => {
+  it("ends the turn on a proposal without asking the model for a closing message", async () => {
     const { run, transport } = setup([
       toolCallsCompletion([
         { name: "turnos.cancelar", args: { appointmentId: "apt_today_0800" }, id: "call_1" },
         { name: "turnos.cancelar", args: { appointmentId: "apt_today_1400" }, id: "call_2" },
       ]),
-      textCompletion("ok"),
+      textCompletion("never requested"),
     ]);
 
-    await run();
+    const result = await run();
 
-    const toolMessages =
-      transport.requests[1]?.messages.filter((message) => message.role === "tool") ?? [];
-    expect(toolMessages).toHaveLength(2);
-    expect(toolMessages[1]?.content).toContain("confirm or cancel the pending proposal");
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.remaining()).toBe(1);
+    expect(result.modelCalls).toBe(1);
+    expect(result.stoppedReason).toBe("proposal_ready");
+    expect(result.reply).toBe(PROPOSAL_REPLY);
+    expect(result.toolCalls.map((call) => call.status)).toEqual(["proposal", "denied"]);
+  });
+
+  it("keeps the model's own words next to the proposal when it wrote some", async () => {
+    const { run } = setup([
+      {
+        ...toolCallCompletion("turnos.cancelar", { appointmentId: "apt_today_0800" }),
+        content: "Dale, cancelo el de Ana.",
+      },
+    ]);
+
+    const result = await run();
+
+    expect(result.reply).toBe("Dale, cancelo el de Ana.");
+  });
+
+  it("returns the successful reads of the turn for the conversation memory", async () => {
+    const { run } = setup([
+      toolCallsCompletion([
+        { name: "turnos.del_dia", args: {}, id: "call_1" },
+        { name: "turnos.cancelar", args: { appointmentId: "apt_today_0800" }, id: "call_2" },
+      ]),
+    ]);
+
+    const result = await run();
+
+    expect(result.readTrace.map((message) => message.role)).toEqual(["assistant", "tool"]);
+    expect(result.readTrace[0]?.toolCalls?.map((call) => call.name)).toEqual(["turnos.del_dia"]);
+    expect(result.readTrace[1]?.toolCallId).toBe("call_1");
+    expect(result.readTrace[1]?.content).toContain("Ana G.");
   });
 
   it("still allows read tools after a write proposal", async () => {

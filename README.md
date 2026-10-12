@@ -220,15 +220,21 @@ comes back.
    chats and expired proposals execute nothing. Backend rejections (including
    HTTP 500 domain errors like "slot taken") become clear Spanish messages.
 
+A turn ends as soon as it produces a proposal: the model is not asked again for
+a closing line (`stoppedReason: proposal_ready`); its own text, if it wrote any,
+or a fixed "confirmame" line goes above the buttons.
+
 A turn proposes **at most one write**. Further write tool calls in the same turn
 are refused (audited as `denied`) and answered with a tool result that tells the
 model to ask for confirmation on the pending action first; reads keep working.
 
 ### Conversation memory
 
-Each chat keeps its last six exchanges (the visible text only, no tool results)
-in process memory, so an answer like "Nude Glitter 118" is read against the
-question it answers. A chat is forgotten after 30 idle minutes, when a proposal
+Each chat keeps its last six exchanges in process memory, so an answer like
+"Nude Glitter 118" is read against the question it answers. The last two
+exchanges also replay their successful reads (today's appointments, the compact
+catalog), so the next message does not spend a model round trip on them; write
+results are never replayed. A chat is forgotten after 30 idle minutes, when a proposal
 is cancelled, and when one is confirmed — except a confirmed completion, which
 restarts the chat from the stock question. Nothing is persisted; a restart
 starts every chat over. Each `llm_turn` audit entry records `latencyMs` and

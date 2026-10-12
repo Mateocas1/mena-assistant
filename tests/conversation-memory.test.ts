@@ -98,6 +98,40 @@ describe("ConversationMemory", () => {
     ]);
   });
 
+  it("replays the reads of the last two exchanges so the model need not repeat them", () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const read = (id: string, content: string) => [
+      {
+        role: "assistant" as const,
+        content: null,
+        toolCalls: [{ id, name: "turnos.del_dia", arguments: "{}" }],
+      },
+      { role: "tool" as const, toolCallId: id, content },
+    ];
+    memory.record("111", "uno", "1", read("call_1", "turnos del lunes"));
+    memory.record("111", "dos", "2", read("call_1", "turnos del martes"));
+    memory.record("111", "tres", "3", read("call_1", "turnos del miércoles"));
+
+    const history = memory.history("111");
+    expect(history.map((message) => message.content)).toEqual([
+      "uno",
+      "1",
+      "dos",
+      null,
+      "turnos del martes",
+      "2",
+      "tres",
+      null,
+      "turnos del miércoles",
+      "3",
+    ]);
+    const ids = history.flatMap((message) =>
+      message.toolCallId ? [message.toolCallId] : (message.toolCalls ?? []).map((call) => call.id),
+    );
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.filter((id) => id.endsWith("call_1"))).toHaveLength(4);
+  });
+
   it("replaces the history with a single bot question", () => {
     const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
     memory.record("111", "completá el turno de ana", "Preparé la propuesta.");
@@ -160,7 +194,6 @@ describe("multi-turn conversation", () => {
           appointmentId: "apt_past_0800",
           fecha: "2026-01-07",
         }),
-        textCompletion("Preparé la propuesta."),
         textCompletion("Anotado."),
       ],
       memory,
@@ -175,7 +208,7 @@ describe("multi-turn conversation", () => {
     });
     await handleMessage(deps, { chatId: ROMI, text: "Nude Glitter 118" });
 
-    expect(conversation(transport.requests[2]!)).toEqual([
+    expect(conversation(transport.requests[1]!)).toEqual([
       `assistant: ${outcome.text}`,
       "user: Nude Glitter 118",
     ]);
@@ -200,6 +233,35 @@ describe("multi-turn conversation", () => {
     });
 
     expect(memory.history(String(ROMI))).toEqual([]);
+  });
+});
+
+describe("remembered reads", () => {
+  it("hands the next message the reads the previous one already made", async () => {
+    const memory = new ConversationMemory({ clock: fixedClock(TEST_INSTANT) });
+    const { deps, transport } = setup(
+      [
+        toolCallCompletion("turnos.del_dia", { fecha: "hoy" }),
+        textCompletion("¿Qué color le pusiste?"),
+        textCompletion("Anotado."),
+      ],
+      memory,
+    );
+
+    await handleMessage(deps, { chatId: ROMI, text: "registrá el soft gel de ana" });
+    await handleMessage(deps, { chatId: ROMI, text: "Nude Glitter 118" });
+
+    const second = transport.requests[2]!.messages;
+    const toolResult = second.find((message) => message.role === "tool");
+    expect(toolResult?.content).toContain("Ana G.");
+    expect(second.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "user",
+    ]);
   });
 });
 
