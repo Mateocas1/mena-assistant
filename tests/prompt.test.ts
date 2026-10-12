@@ -61,6 +61,13 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("No le expliques a Romi cosas del oficio");
   });
 
+  it("chats about any topic but takes salon data only from tools", () => {
+    const prompt = buildSystemPrompt(CLOCK);
+    expect(prompt).toContain("Podés charlar de cualquier tema");
+    expect(prompt).toContain("los datos del salón salen sólo de las herramientas");
+    expect(prompt).toContain("que no te preguntó");
+  });
+
   it("keeps the stock chain rules behind the stock flag", () => {
     expect(buildSystemPrompt(CLOCK)).not.toContain("stock.registrar_servicio");
     expect(buildSystemPrompt(CLOCK, { stockEnabled: true })).toContain("stock.registrar_servicio");
