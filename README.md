@@ -220,6 +220,16 @@ comes back.
    chats and expired proposals execute nothing. Backend rejections (including
    HTTP 500 domain errors like "slot taken") become clear Spanish messages.
 
+### Conversation memory
+
+Each chat keeps its last six exchanges (the visible text only, no tool results)
+in process memory, so an answer like "Nude Glitter 118" is read against the
+question it answers. A chat is forgotten after 30 idle minutes, when a proposal
+is cancelled, and when one is confirmed — except a confirmed completion, which
+restarts the chat from the stock question. Nothing is persisted; a restart
+starts every chat over. Each `llm_turn` audit entry records `latencyMs` and
+`modelCalls`.
+
 A turn proposes **at most one write**. Further write tool calls in the same turn
 are refused (audited as `denied`) and answered with a tool result that tells the
 model to ask for confirmation on the pending action first; reads keep working.
@@ -234,7 +244,9 @@ credential, and closes the loop from a finished appointment:
    a mena-nails key (`servicio-softgel` → `soft_gel`, `capping`,
    `semipermanente`); `retiro-*` consumes nothing and is not registered.
 2. The bot asks only for what the appointment does not carry: the colour
-   (`stock.catalogo`) and, for Soft Gel, the tips (one shape/size, 10 units).
+   (`stock.catalogo`) and, for Soft Gel, the tips: 10 units in total, usually
+   across several sizes (one allocation per tip item, e.g. 4 of size 3 and 6 of
+   size 5). The proposal lists each size with its units.
 3. The model proposes `stock.registrar_servicio` with
    `sourceAppointmentId` = the appointment id; Romi confirms; the API call runs
    with `retry: false`.
