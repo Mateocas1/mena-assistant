@@ -14,8 +14,7 @@ import {
 } from "../../time/index.js";
 import { ToolArgumentError, type ToolHandlerContext } from "../registry.js";
 
-export const FECHA_DESCRIPTION =
-  "Fecha en America/Argentina/Buenos_Aires: YYYY-MM-DD, 'hoy', 'mañana', 'ayer' o un día de la semana ('el jueves').";
+export const FECHA_DESCRIPTION = "Fecha ART: YYYY-MM-DD, 'hoy', 'mañana', 'ayer' o 'el jueves'.";
 
 export const SLOT_PATTERN = /^\d{2}:\d{2}$/;
 export const SLOT_DESCRIPTION =

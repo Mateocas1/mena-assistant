@@ -183,6 +183,12 @@ export function describeTool(tool: ToolDefinition, clock: Clock): string {
 }
 
 /** Serialises tool definitions as OpenAI function specs (JSON Schema parameters). */
+/** The tool's JSON Schema without the `$schema` dialect line, sent on every call for nothing. */
+function wireSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _dialect, ...rest } = z.toJSONSchema(schema) as Record<string, unknown>;
+  return rest;
+}
+
 export function serializeTools(
   tools: readonly ToolDefinition[],
   clock: Clock = systemClock,
@@ -192,7 +198,7 @@ export function serializeTools(
     function: {
       name: tool.name,
       description: describeTool(tool, clock),
-      parameters: z.toJSONSchema(tool.schema) as Record<string, unknown>,
+      parameters: wireSchema(tool.schema),
     },
   }));
 }

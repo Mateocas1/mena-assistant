@@ -116,3 +116,17 @@ describe("ToolRegistry", () => {
     expect(registry.get("turnos.cancelar")?.kind).toBe("write");
   });
 });
+
+describe("tool payload size", () => {
+  const tools = createToolRegistry({ turnos: true, stock: true, tareas: false }).forProfile("romi");
+  const specs = serializeTools(tools);
+
+  it("does not send the JSON Schema dialect with every tool", () => {
+    expect(specs.every((spec) => !("$schema" in spec.function.parameters))).toBe(true);
+  });
+
+  it("keeps Romi's whole tool list under 13,000 characters", () => {
+    // Measured 15,018 before trimming (2026-10-12); every call pays for this prefill.
+    expect(JSON.stringify(specs).length).toBeLessThan(13_000);
+  });
+});
