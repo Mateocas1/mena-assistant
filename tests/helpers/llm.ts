@@ -21,7 +21,8 @@ export class ScriptedTransport implements LlmTransport {
   }
 
   async complete(request: LlmCompletionRequest, options: LlmCallOptions): Promise<LlmCompletion> {
-    this.requests.push(request);
+    // Copy: the loop keeps appending to the same array after this call.
+    this.requests.push({ ...request, messages: [...request.messages] });
     this.calls.push(options);
     const next = this.script.shift();
     if (next === undefined) throw new Error("ScriptedTransport: script exhausted");

@@ -3,6 +3,7 @@ import { createTareasBackend } from "./adapters/tareas/index.js";
 import { AuditLogger, createFileSink } from "./audit/index.js";
 import { createBot } from "./bot/index.js";
 import type { BotDeps } from "./bot/core.js";
+import { ConversationMemory } from "./bot/memory.js";
 import { ConfigError, parseConfig, type AppConfig } from "./config.js";
 import { createLlmTransport, type LlmTransport } from "./llm/index.js";
 import { checkLiveness, parseRunMode, startLiveness } from "./health.js";
@@ -33,6 +34,7 @@ export function createBotDeps(config: AppConfig, options: CreateDepsOptions = {}
       ...(options.clock ? { clock: options.clock } : {}),
     }),
     transport: options.transport ?? createLlmTransport(config),
+    memory: new ConversationMemory(options.clock ? { clock: options.clock } : {}),
     audit:
       options.audit ??
       new AuditLogger({

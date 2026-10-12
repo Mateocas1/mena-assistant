@@ -29,6 +29,8 @@ export interface ToolLoopOptions {
   readonly config: ToolLoopConfig;
   readonly audit: AuditLogger;
   readonly systemPrompt: string;
+  /** Earlier user/assistant text of this chat, oldest first. */
+  readonly history?: readonly LlmMessage[];
   readonly userMessage: string;
 }
 
@@ -121,6 +123,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
   const messages: LlmMessage[] = [
     { role: "system", content: options.systemPrompt },
+    ...(options.history ?? []),
     { role: "user", content: options.userMessage },
   ];
 

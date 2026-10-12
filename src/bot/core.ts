@@ -15,6 +15,7 @@ import type { Proposal, ProposalStore } from "../proposals/store.js";
 import { withSpan } from "../telemetry/tracer.js";
 import { systemClock, type Clock } from "../time/index.js";
 import { resolveProfile, isToolAllowed } from "./allowlist.js";
+import type { ConversationMemory } from "./memory.js";
 
 export const MODEL_ERROR_REPLY = "No pude contactar al modelo. Intentá de nuevo en un momento.";
 export const GENERIC_ERROR_REPLY = "Algo salió mal de mi lado. Intentá de nuevo en un momento.";
@@ -33,6 +34,8 @@ export interface BotDeps {
   readonly transport: LlmTransport;
   readonly audit: AuditLogger;
   readonly clock?: Clock;
+  /** Per-chat conversation memory; without it every message starts from scratch. */
+  readonly memory?: ConversationMemory;
 }
 
 export interface IncomingMessage {
@@ -127,6 +130,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
           },
           audit: deps.audit,
           systemPrompt: buildSystemPrompt(clock, { stockEnabled: deps.config.features.stock }),
+          history: deps.memory?.history(chatId) ?? [],
           userMessage: message.text,
         }),
     );
@@ -141,6 +145,7 @@ export async function handleMessage(deps: BotDeps, message: IncomingMessage): Pr
       detail: result.stoppedReason,
     });
 
+    deps.memory?.record(chatId, message.text, result.reply);
     return { kind: "reply", text: result.reply, proposals: result.proposals };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -204,6 +209,7 @@ export async function handleCallback(
       tool: proposal.tool,
       status: "ok",
     });
+    deps.memory?.clear(chatId);
     return { kind: "reply", text: CANCELLED_REPLY };
   }
 
@@ -255,7 +261,11 @@ export async function handleCallback(
     const followUp =
       deps.config.features.stock && data?.chain ? `\n\n${stockChainPrompt(data.chain)}` : "";
 
-    return { kind: "reply", text: `✅ ${proposal.summary}.${extra}${followUp}` };
+    const text = `✅ ${proposal.summary}.${extra}${followUp}`;
+    // The stock question is the next thing Romi answers; anything older is done.
+    if (followUp) deps.memory?.replaceWithAssistant(chatId, text);
+    else deps.memory?.clear(chatId);
+    return { kind: "reply", text };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     // Adapter errors carry Spanish copy for the user; anything else stays generic.
