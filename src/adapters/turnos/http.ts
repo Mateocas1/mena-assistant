@@ -140,7 +140,7 @@ function isRetryable(error: unknown): boolean {
 }
 
 /**
- * Real booking backend client (`test-kimi` 30a `/assistant/*` HTTP actions).
+ * Real booking backend client (`/assistant/*` HTTP actions of the booking backend).
  *
  * Every route is a POST with a Bearer service token; reads retry once on 5xx or
  * a network failure, writes never retry, and every response is validated against

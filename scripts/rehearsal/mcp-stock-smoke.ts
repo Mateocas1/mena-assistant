@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * T4 smoke: the *assistant's* stock write against the local mena-nails stack,
+ * Smoke: the *assistant's* stock write against the local mena-nails stack,
  * driven through a real MCP client session.
  *
  * It connects to the same MCP server the operator's agent uses

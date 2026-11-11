@@ -1,16 +1,16 @@
 import { addDays } from "../../time/index.js";
 import type { Appointment, AssistantVerification, RefundSummary, Service } from "./client.js";
 
-/** Slots offered by the salon (test-kimi `TIME_SLOTS`). */
+/** Slots offered by the salon (booking backend `TIME_SLOTS`). */
 export const TIME_SLOTS = ["08:00", "11:00", "14:00", "16:30", "18:30"] as const;
 
-/** Statuses that occupy a slot (test-kimi `ACTIVE_BOOKING_STATUSES`). */
+/** Statuses that occupy a slot (booking backend `ACTIVE_BOOKING_STATUSES`). */
 export const ACTIVE_BOOKING_STATUSES = ["pending", "paid", "confirmed"] as const;
 
-/** Statuses that count as revenue in the daily summary (test-kimi `getDailySummary`). */
+/** Statuses that count as revenue in the daily summary (booking backend `getDailySummary`). */
 export const REVENUE_STATUSES = ["paid", "confirmed", "completed"] as const;
 
-/** Statuses that still need a human decision (test-kimi `NON_TERMINAL_VERIFICATION_STATUSES`). */
+/** Statuses that still need a human decision (booking backend `NON_TERMINAL_VERIFICATION_STATUSES`). */
 export const NON_TERMINAL_VERIFICATION_STATUSES = [
   "pending",
   "auto_match",
@@ -35,7 +35,7 @@ export interface TurnosFixtures {
   readonly refunds: RefundSummary;
 }
 
-/** Canonical catalog (test-kimi `CANONICAL_SERVICE_CATALOG`). */
+/** Canonical catalog (booking backend `CANONICAL_SERVICE_CATALOG`). */
 const SERVICES: readonly Service[] = [
   { slug: "retiro-softgel", name: "Retiro Soft Gel", price: 8000, durationMinutes: 40 },
   { slug: "retiro-capping", name: "Retiro Capping", price: 7000, durationMinutes: 40 },

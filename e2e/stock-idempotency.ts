@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * M3 acceptance e2e: a retried `POST /services` must not deduct twice.
+ * Acceptance e2e: a retried `POST /services` must not deduct twice.
  *
  * It brings up the mena-nails local stack under the compose project `m3e2e`
  * (never touching other containers), seeds the catalog, confirms a stocktake,

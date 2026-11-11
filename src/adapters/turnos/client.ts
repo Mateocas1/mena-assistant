@@ -1,7 +1,7 @@
 /**
  * Shape of the Mena Nails booking backend. Every field matches the real
- * `/assistant/*` responses documented in `test-kimi/docs/assistant-api.md` and
- * implemented in `convex/assistant.ts`, so M1 only swaps the transport.
+ * `/assistant/*` responses documented in the booking repository's `docs/assistant-api.md` and
+ * implemented in `convex/assistant.ts`, so the HTTP backend only swaps the transport.
  */
 
 /**

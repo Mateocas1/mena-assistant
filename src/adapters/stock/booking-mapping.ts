@@ -9,7 +9,7 @@ function normalize(value: string): string {
 }
 
 /**
- * Maps a booking service (test-kimi slug or display name) to the mena-nails
+ * Maps a booking service (booking slug or display name) to the mena-nails
  * service key. `retiro-*` ("Retiro Soft Gel", …) consumes no stock, so it maps
  * to nothing and the assistant must not register a service log for it.
  */

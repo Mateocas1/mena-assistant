@@ -42,7 +42,7 @@ are silent in the UI until you look at the network tab:
 | 3. web opened at `127.0.0.1:5173` while `API_ALLOWED_ORIGIN=http://localhost:5173` | every API call fails (CORS); login looks broken                                                                                                                     | `POST /auth/login` with `Origin: http://127.0.0.1:5173` → `403 origin rejected` (`apps/api/internal/server/auth.go:97`)                                                                | derives `API_ALLOWED_ORIGIN` from the exact origin it starts the web on (`localhost:5173`), and verifies it by logging in |
 | 4. WSL + Docker Desktop `credsStore: desktop.exe`                                  | every build aborts with `error getting credentials`                                                                                                                 | `docker compose up --build` on this host                                                                                                                                               | switches to an anonymous `DOCKER_CONFIG` under `/tmp/mena-rehearsal/`                                                     |
 
-## T3: reproducing "I tried to load the inventory manually from the page and it didn't let me"
+## Reproducing "I tried to load the inventory manually from the page and it didn't let me"
 
 With `up.sh` (seeded, credentials exported, matching origin) the whole manual
 path works end to end, so the owner's report is caused by pitfall 1:
@@ -111,15 +111,15 @@ tests plus the MCP write path above.
 
 `up.sh` runs `TURNOS_BACKEND=mock` and warns about it. Reasons, in order:
 
-- `test-kimi` is **not linked** to a deployment: no `.env.local`, no
+- `mena-nails-turnos` is **not linked** to a deployment: no `.env.local`, no
   `convex.json`, so `npx convex dev --once` needs an interactive project
   selection (project `mena-nailss`) and cannot be driven non-interactively.
 - `convex dev` also regenerates the tracked `convex/_generated/*` files, which
   would edit a repository this rehearsal is only allowed to run.
-- `test-kimi` has no appointment seed (`convex/seed.ts` exports only
+- `mena-nails-turnos` has no appointment seed (`convex/seed.ts` exports only
   `seedServices`), so "today's appointments" would have to be created by hand.
 
-To attach it later, in the `test-kimi` checkout:
+To attach it later, in the `mena-nails-turnos` checkout:
 
 ```bash
 npx convex dev --once          # once, interactively: select project mena-nailss

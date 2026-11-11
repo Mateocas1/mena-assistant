@@ -20,7 +20,7 @@ export const SLOT_PATTERN = /^\d{2}:\d{2}$/;
 export const SLOT_DESCRIPTION =
   "Horario en formato HH:MM (por ejemplo 16:30), uno de los horarios del salón.";
 
-/** Window the backend enforces for bookings (test-kimi `MAX_ADVANCE_DAYS`). */
+/** Window the backend enforces for bookings (booking backend `MAX_ADVANCE_DAYS`). */
 export const MAX_ADVANCE_DAYS = 30;
 
 /**

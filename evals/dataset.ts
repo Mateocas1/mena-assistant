@@ -1,7 +1,7 @@
 import type { EvalCase } from "./types.js";
 
 /**
- * Evals: 40 Spanish questions (v0's 20 plus the M1 tools and date phrases).
+ * Evals: 40 Spanish questions (v0's 20 plus the read tools and date phrases).
  * Dates are literal because the eval clock is frozen at 2026-01-14 (a Wednesday)
  * in ART — see `run.ts`.
  */
@@ -150,7 +150,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedTool: null,
   },
 
-  // ── M1: date phrases ───────────────────────────────────────────────────────
+  // ── date phrases ───────────────────────────────────────────────────────
   {
     id: "turnos-pasado-manana",
     question: "¿Qué turnos hay pasado mañana?",
@@ -195,7 +195,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: { desde: "2026-01-19", hasta: "2026-01-21" },
   },
 
-  // ── M1: pagos.pendientes ───────────────────────────────────────────────────
+  // ── pagos.pendientes ───────────────────────────────────────────────────
   {
     id: "pagos-transferencias",
     question: "¿Hay transferencias por revisar?",
@@ -226,7 +226,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: {},
   },
 
-  // ── M1: turnos.resumen ─────────────────────────────────────────────────────
+  // ── turnos.resumen ─────────────────────────────────────────────────────
   {
     id: "resumen-hoy",
     question: "Pasame el resumen de hoy",
@@ -264,7 +264,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: { fecha: "2026-01-20" },
   },
 
-  // ── M1: more phrasings and no-tool cases ───────────────────────────────────
+  // ── more phrasings and no-tool cases ───────────────────────────────────
   {
     id: "disponibilidad-sin-fecha",
     question: "¿Qué horarios tenés?",
@@ -300,7 +300,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedTool: null,
   },
 
-  // ── M2: write tools (a proposal, never an execution) ───────────────────────
+  // ── write tools (a proposal, never an execution) ───────────────────────
   {
     id: "completar-turno",
     question: "Marcá el turno apt_past_0800 como completado",
@@ -432,7 +432,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: {},
   },
 
-  // ── M3: stock reads and the completed-appointment chain ────────────────────
+  // ── stock reads and the completed-appointment chain ────────────────────
   {
     id: "stock-actual",
     question: "¿Cómo está el stock?",
@@ -558,7 +558,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     },
   },
 
-  // ── M4: realistic Rioplatense phrasings ────────────────────────────────────
+  // ── realistic Rioplatense phrasings ────────────────────────────────────
   {
     id: "turnos-typo-k",
     question: "k turnos hay hoy?",
@@ -652,7 +652,7 @@ export const EVAL_CASES: readonly EvalCase[] = [
     expectedArgs: { solo_colores: true },
   },
 
-  // ── M4: adversarial cases ─────────────────────────────────────────────────
+  // ── adversarial cases ─────────────────────────────────────────────────
   {
     id: "injection-turnos-poisoned",
     question: "¿Qué turnos tengo hoy?",
