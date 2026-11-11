@@ -1,24 +1,73 @@
 # mena-assistant
 
-Telegram assistant for Mena Nails: an MCP server with tools over the booking
-backend, an LLM tool-calling loop, chat allowlist + permission profiles, an
-audit log, ART time handling, and a confirmation flow so **the LLM never
-writes**.
+> - **What:** a Telegram assistant for a nail studio. The owner asks about bookings and stock; anything that writes is a proposal she confirms with a button.
+> - **Status:** built for a freelance client, Mena Nails (May – Oct 2026, finished). Pre-launch: it is not running in production and has no usage data.
+> - **Stack:** TypeScript on Node 24, pnpm 11, MCP SDK, grammY, OpenAI-compatible API, Zod, Vitest, GitHub Actions.
+> - **Run without credentials:** `pnpm install && pnpm test && pnpm eval` (mock backends, scripted model).
+> - **Related:** [receipt-verifier](https://github.com/Mateocas1/receipt-verifier) · [case study](https://mateocas1.github.io/portfolio/mena-nails.html)
+> - **How it was built:** I design, decide and verify: I define the tests, the review criteria and the measurements. AI agents write much of the code under those tests and that review.
 
-Romi (the salon owner) asks in a Telegram chat — "¿qué turnos tengo hoy?",
-"¿qué horarios quedan el jueves?", "cancelá el turno de Laura del viernes" —
-and the assistant answers with real data and, for anything that mutates, returns
-a **proposal** she confirms with an inline **Confirmar / Cancelar** button.
+## What it does
 
-**Status: M4 (evals, traces, planner).** The `turnos.*` / `pagos.*`
-tools run against the real `mena-nails-turnos` (`test-kimi`) `/assistant/*` HTTP
-actions when `TURNOS_BACKEND=http`, or against a fixture-backed mock that mirrors
-the same contract shapes (`mock`, the dev/CI default). Every write is
-confirm-gated. An in-process scheduler sends the 08:00 ART daily summary and debounced backend
-health/stock alerts. With `FEATURE_STOCK` the assistant reads mena-nails stock and
-closes the "completed appointment → service log" chain; with `FEATURE_TAREAS`
-Mateo's own planner is available to his chat only. OpenTelemetry spans are
-exported only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+The owner writes in a Telegram chat: "¿qué turnos tengo hoy?", "¿cuánto esmalte queda?", "cancelá el turno del viernes". The assistant answers with data from the booking and inventory APIs, which it reaches through MCP tools.
+
+The LLM never writes on its own. Every write is a proposal with a one-use **Confirmar / Cancelar** button. The button expires and is bound to the chat that received it (`tests/proposal-store.test.ts`).
+
+All names, phone numbers and appointments in fixtures, tests and evals are invented.
+
+## How the model was chosen
+
+I built an eval of 87 tool-calling cases and ran it against 6 LLMs on 2026-10-02 (results in `evals/results/2026-10-02-*.json`). The chosen model, qwen3.8-flash (`evals/results/2026-10-02-qwen3.8-flash.json`):
+
+| Metric                    | Value                  |
+| ------------------------- | ---------------------- |
+| Tool selection            | 98.9 %                 |
+| Arguments                 | 97.7 %                 |
+| Invented tool or argument | 1.1 %                  |
+| Cases fully passed        | 84 / 87 (96.6 %)       |
+| Latency                   | p50 8.2 s / p95 17.2 s |
+
+Tool selection and full passes are different numbers: 98.9 % is the share of cases where it picked the right tool; 84 of 87 cases passed every check. The full six-model table is under [Model comparison](#model-comparison).
+
+The CI runs the same 87 cases with a **scripted mock model**, not a real one. That run pins tool selection and date handling so regressions fail in CI. Its result (87/87, tool 100 %) is the scripted mock passing, not a measure of model quality. Live comparisons need an API key and never run in CI:
+
+```bash
+pnpm eval                          # 87 cases, scripted mock model + mock backends, deterministic, in CI
+pnpm eval:smoke                    # 16-case subset (path-filtered workflow)
+pnpm eval:compare --models a,b,c   # live comparison (needs LLM_API_KEY)
+```
+
+## Run it locally
+
+Requirements: Node 24 or newer (`engines`, CI uses 24) and pnpm 11.11.0 (`packageManager`).
+
+```bash
+pnpm install --frozen-lockfile
+pnpm lint && pnpm typecheck
+pnpm test          # 383 Vitest tests in 38 files
+pnpm eval          # scripted mock model, 87 cases
+```
+
+None of these needs a credential: `TURNOS_BACKEND` and `STOCK_BACKEND` default to `mock`, which serve fixtures anchored on today's date in Buenos Aires time.
+
+The MCP server also runs against the mock backends. It never calls Telegram or the LLM, but config validation still requires the three variables, so placeholders are enough:
+
+```bash
+TELEGRAM_BOT_TOKEN=unused TELEGRAM_ALLOWLIST=1:romi LLM_API_KEY=unused MCP_PROFILE=romi pnpm mcp
+```
+
+The Telegram bot itself (`pnpm dev`) needs a real `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWLIST` and `LLM_API_KEY`; copy `.env.example` and see [Environment variables](#environment-variables).
+
+## Tests
+
+`pnpm test` runs 383 Vitest tests in 38 files. CI (`.github/workflows/ci.yml`) runs format check, lint, typecheck, tests, the scripted eval and the build on every push to `main` and on pull requests. Neither workflow reads a secret or a repository variable.
+
+## Limits
+
+- Not running in production and no usage data.
+- The eval set is 87 hand-written cases, not real conversations.
+- Repeated live runs moved single models by 1 to 3 cases, so small gaps between models are ties.
+- Cost per model is not measured: no prices are configured.
 
 ## Architecture
 
@@ -41,8 +90,8 @@ Telegram (Romi, Mateo)
 │ mena-assistant-mcp                                           │
 │  ├─ turnos.*  → 30a backend: TURNOS_BACKEND=http (real)     │
 │  │              or mock fixtures (dev/CI)                    │
-│  ├─ stock.*   → mena-nails API Go        [FEATURE_STOCK, M3] │
-│  └─ tareas.*  → Firestore Admin (Mateo)  [FEATURE_TAREAS, M5]│
+│  ├─ stock.*   → mena-nails API Go        [FEATURE_STOCK]     │
+│  └─ tareas.*  → Firestore Admin (Mateo)  [FEATURE_TAREAS]    │
 │  + proposals (Confirm/Cancel) + audit + ART timezone + PII   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -88,7 +137,7 @@ src/
 evals/                  40-case dataset, scripted (CI) and live runners
 scripts/metrics.ts      pnpm metrics CLI
 evals/compare.ts        live model comparison + README table
-evals/prices.json       per-model price table ([VERIFY] where unknown)
+evals/prices.json       per-model price table (no prices filled in)
 docs/case-study.md      portfolio write-up (results sections are TODO)
 e2e/stock-idempotency.ts  compose e2e: a retried service log never deducts twice
 tests/                  vitest suites
@@ -96,43 +145,12 @@ Dockerfile              multi-stage, non-root, node dist/index.js
 compose.assistant.yml   assistant service snippet for the VM compose
 ```
 
-## Quick start (mock backend)
-
-Requirements: Node 24 and pnpm 11.
-
-```bash
-pnpm install
-cp .env.example .env      # fill in the values below
-pnpm test                 # 285 tests
-pnpm eval                 # 87/87 (scripted, deterministic)
-pnpm dev                  # long polling with the mock backend
-```
-
-With `TURNOS_BACKEND=mock` (the default) no external backend is needed: the read
-tools serve fixtures anchored on today's ART date. Point
-`TURNOS_BACKEND=http` + `ASSISTANT_API_BASE_URL` + `ASSISTANT_TOKEN` at the real
-`/assistant/*` actions to read production data.
-
-### Create the Telegram bot and get chat ids
-
-1. Talk to [@BotFather](https://t.me/BotFather), send `/newbot`, pick a name and
-   a username ending in `bot`. BotFather replies with the **token** →
-   `TELEGRAM_BOT_TOKEN`.
-2. Send any message to your new bot, then open
-   `https://api.telegram.org/bot<TOKEN>/getUpdates` and read `chat.id`. Or talk
-   to [@userinfobot](https://t.me/userinfobot), which replies with your id.
-3. Put the ids in `TELEGRAM_ALLOWLIST`, one `chatId:profile` pair per chat, e.g.
-   `TELEGRAM_ALLOWLIST=123456789:romi,987654321:mateo`. Profiles are `romi`
-   (turnos, pagos, stock) and `mateo` (everything, including `tareas.*`).
-4. Any chat that is **not** listed gets no reply, no LLM call and no tool call;
-   the drop is audited with a hashed chat id and no message content.
-
 ## Environment variables
 
 | Variable                        | Default                       | Purpose                                                            |
 | ------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
 | `TELEGRAM_BOT_TOKEN`            | — (required)                  | BotFather token.                                                   |
-| `TELEGRAM_ALLOWLIST`            | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.                   |
+| `TELEGRAM_ALLOWLIST`            | — (required)                  | `chatId:profile` list; profiles `romi` / `mateo`.                  |
 | `LLM_BASE_URL`                  | `https://api.nan.builders/v1` | OpenAI-compatible base URL.                                        |
 | `LLM_API_KEY`                   | — (required)                  | Provider key.                                                      |
 | `LLM_MODEL`                     | `qwen3.8-flash`               | Primary model. **Changing model = changing this var.**             |
@@ -144,8 +162,8 @@ tools serve fixtures anchored on today's ART date. Point
 | `ASSISTANT_TOKEN`               | —                             | Bearer token for `/assistant/*`; required with `http`.             |
 | `TURNOS_TIMEOUT_MS`             | `10000`                       | Per-request timeout for the booking backend.                       |
 | `FEATURE_TURNOS`                | `true`                        | Registers `turnos.*`.                                              |
-| `FEATURE_STOCK`                 | `false`                       | Registers `stock.*` (stub until M3).                               |
-| `FEATURE_TAREAS`                | `false`                       | Registers `tareas.*` (Mateo only; stub until M5).                  |
+| `FEATURE_STOCK`                 | `false`                       | Registers `stock.*`.                                               |
+| `FEATURE_TAREAS`                | `false`                       | Registers `tareas.*` (Mateo only).                                 |
 | `PROPOSAL_TTL_MINUTES`          | `10`                          | Proposal lifetime before the Confirm button dies.                  |
 | `AUDIT_LOG_FILE`                | — (stdout)                    | Appends the JSONL audit log there; read by `pnpm metrics`.         |
 | `HEALTH_FILE`                   | `/tmp/mena-assistant-alive`   | Heartbeat file for the offline container healthcheck.              |
@@ -167,12 +185,12 @@ tools serve fixtures anchored on today's ART date. Point
 | `MENA_NAILS_TIMEOUT_MS`         | `10000`                       | Per-request timeout for the stock API.                             |
 | `STOCK_ALERT_ENABLED`           | `false`                       | Deduped push when a new item drops below threshold.                |
 | `STOCK_ALERT_INTERVAL_SECONDS`  | `1800`                        | Stock alert poll interval.                                         |
-| `STOCK_ALERT_CHAT_ID`           | first `romi` chat              | Where stock alerts go.                                             |
+| `STOCK_ALERT_CHAT_ID`           | first `romi` chat             | Where stock alerts go.                                             |
 
 Invalid configuration fails fast at startup with the offending variables named
 (`node dist/index.js --check` validates without starting the bot).
 
-## Tools (M3)
+## Tools
 
 | Tool                                                        | Kind                 | Backend route it mirrors                        |
 | ----------------------------------------------------------- | -------------------- | ----------------------------------------------- |
@@ -298,149 +316,15 @@ allowlist (`serviceRouteAllowed` in `apps/api/internal/server/access.go`), so
 assistant's `MENA_NAILS_TOKEN` instead of answering `403`. Catalog _changes_
 stay owner-only: the credential is read-only there.
 
-## Daily summary (08:00 ART)
-
-An in-process scheduler (no external cron) computes the next 08:00 in
-`America/Argentina/Buenos_Aires` from the injected clock and sends one message
-per allow-listed chat, built from reads only — no LLM:
-
-```
-☀️ Buenos días — resumen del 2026-01-14
-
-Turnos: 3 (1 confirmed, 1 paid, 1 cancelled) · Seña facturada: $24000
-- 08:00 · Servicio Soft Gel · Ana G. (confirmed)
-- 14:00 · Servicio Capping · Laura P. (paid)
-
-Pagos por revisar: 2
-- 2026-01-14 08:00 · Ana G. · $12500 (pending)
-Reintegros pendientes: 1 · $5000
-```
-
-Romi gets the day's appointments, the pending verifications and the refund
-summary; with `FEATURE_STOCK` the message also lists the items below their
-threshold. Mateo gets the same plus a `tareas` placeholder while `FEATURE_TAREAS`
-is off. If the backend is down the scheduler skips silently and audits
-`daily_summary / backend_unavailable` instead of sending a broken message.
-`DAILY_SUMMARY_ENABLED=false` turns it off and `DAILY_SUMMARY_HOUR` moves it.
-
-## Health alerts
-
-With `HEALTH_ALERT_ENABLED=true` the process polls the cheapest read
-(`turnos.servicios`) every `HEALTH_ALERT_INTERVAL_SECONDS`. After
-`HEALTH_ALERT_FAILURES` consecutive failures it sends **one** message to Mateo's
-chat and **one** recovery message when the backend answers again — a single
-hiccup never spams. Off by default in dev.
-
-## Push alerts belong to mena-nails-turnos
-
-Convex already sends the Telegram admin alerts at the source (transfer to
-review, orphan/duplicate payment, dispute, cancellation, calendar failure), so
-the assistant does **not** duplicate them. Both may use the same bot token:
-Convex only calls `sendMessage`, while the assistant is the only `getUpdates`
-consumer, so long polling never competes.
-
 ## MCP server
 
 ```bash
-pnpm mcp        # stdio; register it in Claude Desktop or your agent
+pnpm mcp        # stdio; register it in any MCP client
 ```
 
 The MCP surface is filtered by `MCP_PROFILE`. Write tools there still only
 return proposals — an external MCP client cannot press Telegram's Confirm
 button, so its proposals expire unless confirmed from the bot.
-
-## Evals
-
-```bash
-pnpm eval        # 87 cases, scripted transport + mock backend, deterministic, in CI
-pnpm eval:smoke  # the ~16 `smoke` cases only (path-filtered CI workflow)
-pnpm eval:compare --models a,b,c   # live model comparison (needs LLM_API_KEY; never in CI)
-pnpm eval:live   # same dataset against a real model (needs LLM_API_KEY; never in CI)
-```
-
-Current result: **87/87 passed · tool 100.0% · args 100.0% · hallucinated 0.0% · write proposals 100.0%**
-(scripted). The scripted transport is not a model-quality measurement: it pins
-tool selection and ART argument resolution so regressions fail in CI. Live model
-selection is measured by `pnpm eval:compare` over six models — see
-[Model comparison](#model-comparison).
-
-## Metrics
-
-The bot writes one JSON line per event (see audit below). When `AUDIT_LOG_FILE`
-is set, it appends there; `pnpm metrics` reads that file and reports queries and
-tool calls per profile per ISO week (ART calendar, e.g. `2026-W03`), plus dropped
-chats. It is what proves "Romi uses it weekly":
-
-```bash
-pnpm metrics ./audit.log
-# profile  week       queries   tools
-# romi      2026-W03        12      20
-#
-# dropped chats: 0
-# weeks with queries: 1 — the assistant is in weekly use
-```
-
-## Deploy
-
-The assistant runs **next to the backend, on the mena-nails VM**, inside the
-production compose (PRD 25). Long polling means it needs no public ingress, and
-the backend is reached over the internal Docker network — no published ports.
-
-1. Copy this repo next to the mena-nails compose (e.g. `./mena-assistant`).
-2. Create `./secrets/assistant.env` (mode `600`, never committed) with the
-   Telegram token and allowlist, `LLM_API_KEY`, `TURNOS_BACKEND=http`,
-   `ASSISTANT_API_BASE_URL` (the Convex `.convex.site` origin) and
-   `ASSISTANT_TOKEN`.
-3. Merge `compose.assistant.yml` into the compose already running on the VM (or
-   pass it as an extra `-f` sharing the `internal` network) and `docker compose
-up -d assistant`.
-
-The image is a multi-stage build that compiles with `pnpm build`, prunes dev
-dependencies and runs `node dist/index.js` as the non-root `assistant` user:
-
-```bash
-docker build -t mena-assistant:m1 .
-docker run --rm --env-file ./secrets/assistant.env mena-assistant:m1 \
-  node dist/index.js --check          # config only: no Telegram, no network
-```
-
-The `HEALTHCHECK` is offline too: the process touches `HEALTH_FILE` every
-`HEALTH_INTERVAL_SECONDS` and `node dist/index.js --healthcheck` fails when the
-heartbeat is missing or older than three intervals. Secrets never enter the
-image; they come from `env_file` on the VM.
-
-Rollback: `docker compose up -d assistant` with the previous image tag, or
-`TURNOS_BACKEND=mock` to fall back to fixtures without redeploying code.
-
-## Traces (optional)
-
-With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the process exports OpenTelemetry spans
-over OTLP HTTP: `bot.turn` → `llm.call` (one per model call) → `tool.call`, and
-from each HTTP adapter an `http.request` span with the backend and path. Span
-attributes go through the same redaction as the audit log, so a client phone or
-email never reaches the collector. Unset (the default) keeps the API's no-op
-tracer: nothing is recorded and the SDK is never loaded.
-
-## Mateo's planner (`tareas.*`)
-
-`FEATURE_TAREAS` registers four tools for **Mateo's chat only**: the permission
-profile hides them from Romi, a test asserts it, and every handler re-checks the
-profile.
-
-| Tool                                  | Kind                 | Notes                                            |
-| ------------------------------------- | -------------------- | ------------------------------------------------ |
-| `tareas.listar()`                     | read                 | open tasks with their deadlines                  |
-| `tareas.agenda(fecha?)`               | read                 | blocks + expanded series occurrences + tasks due |
-| `tareas.crear(titulo, fecha_limite?)` | **write → proposal** | validated with the calendar's own rules          |
-| `tareas.completar(occurrenceId)`      | **write → proposal** | one immutable completion per occurrence          |
-
-The domain validations are copied from `calendar/app/src/domain/model.ts` (with a
-source note; no cross-repo import) so the assistant writes exactly the shapes that
-app already accepts. The Firestore Admin adapter is structurally confined to
-`users/{MATEO_FIREBASE_UID}`: a single `documentPath()` builds every path.
-`TAREAS_BACKEND=mock` (the default) keeps the planner in memory for development
-and CI; `firestore` resolves the Admin SDK lazily on the first tool call, so the
-process starts without credentials.
 
 ## Security rules (non-negotiable)
 
@@ -460,44 +344,6 @@ process starts without credentials.
    require human confirmation.
 7. **Timezone.** Every today/tomorrow/this-week calculation uses
    `America/Argentina/Buenos_Aires`, never UTC.
-
-## Testing and CI
-
-```bash
-pnpm lint && pnpm typecheck && pnpm test && pnpm eval && pnpm build
-```
-
-`.github/workflows/ci.yml` pins every action by SHA and runs format check, lint,
-typecheck, tests, evals (mock) and build on Node 24.
-
-## Provider notes (checked against NaN's public docs)
-
-Checked against <https://nan.builders/docs/models>:
-
-- `qwen3.8-flash` (default) and `deepseek-v4-flash` (fallback) are real ids on
-  the OpenAI-compatible `https://api.nan.builders/v1` base URL, and both
-  advertise standard function calling.
-- Caveats worth knowing:
-  - The docs describe `qwen3.8-flash` tool calling as **XML format**, not OpenAI
-    `function.arguments`. The live comparison did not see that: over 174 measured
-    cases in two full sweeps it always returned structured `tool_calls` (98.9%
-    tool accuracy, 100% of write cases proposed). Treat the caveat as unverified
-    for this client, and re-check with `pnpm eval:live` before relying on a new
-    behaviour.
-  - `glm5.3-flash` answered slowly in both sweeps (p95 38–44 s, above the 30 s
-    `LLM_TIMEOUT_MS`), and `gemma4` timed out often enough to trip the provider's
-    concurrency cap and lose 4–7 cases per sweep. Neither is a safe default.
-  - `deepseek-v4-flash` raises any `max_tokens` below 16384 to 16384, rejects
-    `response_format: json_schema` with a 400, and needs the word `JSON` in the
-    prompt for `json_object`. This client does not set `max_tokens` or
-    `response_format`, so none of that applies today.
-  - Monthly quotas are per member (3B tokens for `deepseek-v4-flash`, 500M for
-    `qwen3.8-flash`, 2B for `glm5.3-flash`). Rate limits were not stated on the
-    pages read; the live runs were throttled client-side (`EVAL_RPM=30`).
-- **Verified by a live run:** `pnpm eval:compare` measured all six ids over the
-  87-case dataset (two full sweeps, `2026-10-02`). Real tool-calling behaviour,
-  latency and token use are in the table below; cost is still `n/d` because the
-  NaN pricing page was never read.
 
 ## Model comparison
 
@@ -527,9 +373,8 @@ a proposal instead of an execution; **p50/p95** = per-call latency.
 | `qwen3.6`           | 96.6% | 93.1% | 1.1%       | 100.0%     | 5840 ms  | 26560 ms | 901572/40540    | n/d   |
 | `gemma4`            | 94.0% | 94.0% | 1.2%       | 92.3%      | 6162 ms  | 25161 ms | 634959/26652    | n/d   |
 
-> USD per 1M tokens. Values marked [VERIFY] are unknown: confirm them in the NaN dashboard before publishing a cost table. The comparison runner prints 'n/d' for a model without prices instead of inventing one.
-> Sin precios configurados para: deepseek-v4-flash, gemma4, glm5.3-flash, mimo-v2.6-flash, qwen3.6, qwen3.8-flash.
-> Casos salteados por rate limit, excluidos de la precisión: gemma4 (4).
+> Cost is `n/d` for every model: `evals/prices.json` has no prices.
+> gemma4: 4 cases hit the provider rate limit and are excluded from its accuracy.
 
 <!-- model-comparison:end -->
 
@@ -551,12 +396,6 @@ mismatch. That costs 1–3 of 87 cases for four of the six models and is reporte
 here instead of being loosened, because a looser rule risks accepting a wrong
 reason.
 
-## Next step
+## License
 
-What M4 still needs from the human side: a few weeks of real use for the
-case-study metrics and growing the dataset toward the PRD's 50–100 real cases.
-The default/fallback pair is now measured, not guessed (see
-[Model comparison](#model-comparison)). Cost remains unmeasured: `evals/prices.json`
-still needs the real NaN prices. M5 (optional) is multimodal input: receipt photos
-and Romi's voice notes. `turnos.sincronizar_precios` remains out of scope:
-mena-nails owns prices.
+No license is granted. All rights reserved.
