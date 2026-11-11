@@ -20,7 +20,10 @@ describe("OpenAiTransport streaming", () => {
         sent = JSON.parse(String(init?.body));
         return sse([
           { ...base, choices: [{ index: 0, delta: { role: "assistant", content: "Ho" } }] },
-          { ...base, choices: [{ index: 0, delta: { content: "la Romi" }, finish_reason: "stop" }] },
+          {
+            ...base,
+            choices: [{ index: 0, delta: { content: "la Romi" }, finish_reason: "stop" }],
+          },
           {
             ...base,
             choices: [],

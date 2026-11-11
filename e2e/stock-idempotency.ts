@@ -19,9 +19,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const MENA_NAILS = resolve(
-  process.env.MENA_NAILS_PATH ?? "../mena-nails",
-);
+const MENA_NAILS = resolve(process.env.MENA_NAILS_PATH ?? "../mena-nails");
 const PROJECT = "m3e2e";
 const PORT = Number(process.env.M3E2E_API_PORT ?? 8080);
 const API = `http://127.0.0.1:${PORT}`;
